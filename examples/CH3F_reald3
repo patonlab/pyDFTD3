@@ -1,0 +1,61 @@
+  _________________________________
+                                   
+ |         DFTD3 V2.1 Rev 3       |
+ | S.Grimme, University Muenster   |
+ |        Thu  Aug 11  2011         |
+ |   see dftd3 -h for options      |
+  _________________________________
+ 
+ Please cite DFT-D3 work done with this code as:
+ S. Grimme, J. Antony, S. Ehrlich and H. Krieg,
+ J. Chem. Phys. 132 (2010), 154104
+ If used with BJ-damping cite also
+ S. Grimme, S. Ehrlich and L. Goerigk,
+ J. Comput. Chem. 32 (2011), 1456-1465
+ For DFT-D2 the reference is
+ S. Grimme, J. Comput. Chem., 27 (2006), 1787-1799
+ 
+  files read :     
+ CH3F.tmol
+C6 coefficients used:
+           2  C6 for element            1
+Z=  1 CN= 0.912     C6(AA)=    3.03
+Z=  1 CN= 0.000     C6(AA)=    7.59
+           5  C6 for element            6
+Z=  6 CN= 0.000     C6(AA)=   49.11
+Z=  6 CN= 0.987     C6(AA)=   43.25
+Z=  6 CN= 1.998     C6(AA)=   29.36
+Z=  6 CN= 2.999     C6(AA)=   25.78
+Z=  6 CN= 3.984     C6(AA)=   18.21
+           2  C6 for element            9
+Z=  9 CN= 0.000     C6(AA)=    9.69
+Z=  9 CN= 0.998     C6(AA)=    7.13
+
+#           XYZ [au]              R0(AA) [Ang.]  CN          C6(AA)     C8(AA)   C10(AA) [au]
+  1   0.00000   0.00000  -1.16323   c   1.455  3.983        18.3       530.5     18795.0
+  2   0.00000   1.90637  -1.83723   h   1.091  0.999         3.1        37.4       553.3
+  3  -1.65096  -0.95318  -1.83723   h   1.091  0.999         3.1        37.4       553.3
+  4   1.65096  -0.95318  -1.83723   h   1.091  0.999         3.1        37.4       553.3
+  5   0.00000   0.00000   1.38790   f   1.150  1.008         7.2       122.7      2572.7
+
+molecular C6(AA) [au] =       146.09
+
+           DFT-D V3
+ DF b3-lyp                                            
+ parameters
+ s6       :    1.0000
+ s8       :    1.7030
+ rs6      :    1.2610
+ rs18     :    1.0000
+ alpha6   :   14.0000
+ alpha8   :   16.0000
+ k1-k3    :   16.0000    1.3333   -4.0000
+ 
+ Edisp /kcal,au:    -0.4652 -0.00074139
+
+ E6    /kcal :    -0.0121
+ E8    /kcal :    -0.4533
+ E6(ABC) "   :   0.000160
+ % E8        : 97.43
+ % E6(ABC)   : -0.03
+ normal termination of dftd3

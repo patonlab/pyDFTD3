@@ -1,0 +1,33 @@
+
+
+## Usage ##
+python eval_D3.py s6 rs6 s8 filename.com/.out 
+
+s6, rs6 and s8 are variable parameters that Grimme has published for the various functionals
+
+If the file is g09 output, the script will try and use the appropriate parameters, but so far I have only coded for B3LYP and the Minnesota functionals
+
+The results (given in Hartree) should be the same as dftd3 with zero-damping (i.e. not BJ-damped) and with the 3-body term switched on (-abc in the original)
+
+(3-body term can be switched off near the bottom of eval_D3.py)
+
+
+## Examples ##
+
+1. Specifying B3LYP params for an input file
+rpaton$ python eval_D3.py 1.0 1.261 1.703 CH3F.com
+
+s6 = 1.0 rs6 =  1.261 s8 = 1.703
+   Breakdown   Attractive-R6   Attractive-R8   Repulsive-3-Body   Total   (Hartree)
+   CH3F.com -1.92973198055e-05 -0.000722345327786 2.55309958043e-07 -0.000741387337633
+
+
+2. B3LYP outfile - params don't matter as the script will figure it out (hopefully) - only works with a few functionals
+rpaton$ python eval_D3.py 1 1 1 CH3F2TS.log 
+   
+o  Using default B3LYP D3 parameters: s6 = 1.0 rs6 =  1.261 s8 = 1.703
+   Breakdown   Attractive-R6   Attractive-R8   Repulsive-3-Body   Total   (Hartree)
+   CH3F2TS.log -0.000123819933174 -0.00219749682351 5.61353002398e-07 -0.00232075540368
+
+
+
