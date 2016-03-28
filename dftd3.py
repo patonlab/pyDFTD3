@@ -1,15 +1,5 @@
 #!/usr/bin/python
 
-###                   ###                     ###          ###      ###
-###                   ###                     ###          ###      ###
-    #####b.   ####b.  ###### .d##b.  #####b.  ###  ####b.  #####b.  ###
-### ### "##b     "##b ###   d##""##b ### "##b ###     "##b ### "##b ###
-### ###  ### .d###### ###   ###  ### ###  ### ### .d###### ###  ###
-### ### d##P ###  ### Y##b. Y##..##P ###  ### ### ###  ### ### d##P ###
-### #####P"  "Y######  "Y### "Y##P"  ###  ### ### "Y###### #####P"  ###
-    ###                                                             
-    ###
-
 # THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,26 +12,22 @@
 # robert.paton@chem.ox.ac.uk
 
 #######################################################################
-#                        eval_D3.py                                   #
-#     Kelvin Jackson & Robert Paton, University of Oxford, 2012       #
+#                          dftd3.py                                   #
 #                                                                     #
-#    This is an attempt to translate the original D3 Fortran code of  #
-#    Grimme, as described in Stefan Grimme, Jens Antony, Stephan      #
-#    Ehrlich, and Helge Krieg, J. Chem. Phys. 132, 154104 (2010)      #
-#                                                                     #
-#    For a Gaussian formatted input/output file this program will     #
-#    compute Grimme's D3 attractive interaction                       #
-#    All attractive potentials, cutoffs, damping, connectivity are    #
-#    taken directly from Grimme's DFT-D3 program                      #
-#    Where connectivity is available (*com), it can be used to scale  #
-#   interactions and compute steric repulsions (under devlopment)     #
+#    This was a little exercise to translate Grimme's D3              #
+#    Fortran code into Python. There is no new science as such!       #
+#    It is possible to implement D3 corrections directly within most  #
+#    electronic structure packages so the only possible use for this  #
+#    is pedagogic or to look at individual terms of the total         #
+#    D3-correction between a pair of atoms or molecules. that         #
+#    This code will read a Gaussian formatted input/output file and   #
+#    compute the D3-density independent dispersion terms without      #
+#    modification. Zero and Becke-Johnson damping schemes are both    #
+#    implemented.                                                     #
 #######################################################################
-#######  Written by:  Rob Paton #######################################
+#######  Written by:  Rob Paton and Kelvin Jackson ####################
 #######  Last modified:  Mar 20, 2013 #################################
 #######################################################################
-
-
-#  To be added:  Becke-Johnson Damping
 
 # Dependent on parameter file
 from pars import *
@@ -236,18 +222,13 @@ elm=['H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si
 ## The computation of the D3 dispersion correction
 class calcD3:
 	def __init__(self, file, s6, rs6, s8):
-		
-		## Use ccParse to get the geomtetric data from file
-		if len(file.split(".com"))>1:
-			file = file.split(".com")[0]
-			fileData = getinData(file)
-				
+
+		## Use ccParse to get the Cartesian coordinates from Gaussian input/output files
+		if len(file.split(".com"))>1 or len(file.split(".gjf"))>1: fileData = getinData(file)
 		if len(file.split(".out"))>1 or len(file.split(".log"))>1:
-			file = file.split(".")[0]
 			fileData = getoutData(file)
-			
 			if hasattr(fileData,"FUNCTIONAL"):
-				#if fileData.FUNCTIONAL == "B3LYP": s6 = 1.0000; rs6 = 1.2610; s8 = 1.7030; #print "   \no  Using default B3LYP D3 parameters:",
+				if fileData.FUNCTIONAL == "B3LYP": s6 = 1.0000; rs6 = 1.2610; s8 = 1.7030; print "   \no  Using default B3LYP D3 parameters:",
 				if fileData.FUNCTIONAL == "BP86": s6 = 1.0000; rs6 = 1.139; s8 = 1.683; print "   \no  Using default BP86 D3 parameters:",
 				if fileData.FUNCTIONAL == "B2PLYP": s6 = 0.5000; rs6 = 1.551; s8 = 1.1090; print "   \no  Using default B2PLYP/TZVPP D3 parameters:",
 				if fileData.FUNCTIONAL == "M06-2X": s6 = 1.0000; rs6 = 1.6190; s8 = 0.0000; print "   \no  Using default M06-2X D3 parameters:",
@@ -255,7 +236,7 @@ class calcD3:
 				if fileData.FUNCTIONAL == "M06": s6 = 1.0000; rs6 = 1.3250; s8 = 0.0000; print "   \no  Using default M06 D3 parameters:",
 				if fileData.FUNCTIONAL == "B97D": s6 = 1.0000; rs6 = 0.8920; s8 = 0.9090; print "   \no  Using default B97-D D3 parameters:",
 	
-		#print "s6 =",s6, "rs6 = ", rs6, "s8 =",s8
+		print "s6 =",s6, "rs6 = ", rs6, "s8 =",s8
 		## Arrays for atoms and Cartesian coordinates ##
 		atomtype = fileData.ATOMTYPES
 		natom = len(atomtype)
@@ -325,11 +306,12 @@ class calcD3:
 		#print "\n   Atoms  Types  C6            C8            E6              E8"
 		for j in range(0,natom):
 			## This could be used to 'switch off' dispersion between bonded or geminal atoms ##
+			scaling = "off"
 			for k in range(j+1,natom):
 				scalefactor=1.0
 				vdw=0
 				
-				if hasattr(fileData,"BONDINDEX"):
+				if scaling=="on" and hasattr(fileData,"BONDINDEX"):
 					if fileData.BONDINDEX[j][k]==1: vdw=0; scalefactor = 0
 					for l in range (0,natom):
 						if fileData.BONDINDEX[j][l] != 0 and fileData.BONDINDEX[k][l]!=0 and j!=k and fileData.BONDINDEX[j][k]==0: vdw=0; scalefactor = 0
@@ -452,5 +434,5 @@ if __name__ == "__main__":
 		if abc == 1: repulsive_abc = fileD3.repulsive_abc/autokcal
 		else: repulsive_abc = 0.0
 		total_vdw = attractive_r6_vdw + attractive_r8_vdw + repulsive_abc
-		#print "   Breakdown   Attractive-R6   Attractive-R8   Repulsive-3-Body   Total   (Hartree)"
+		print "   Breakdown   Attractive-R6   Attractive-R8   Repulsive-3-Body   Total   (Hartree)"
 		print "  ",file, attractive_r6_vdw, attractive_r8_vdw,repulsive_abc, total_vdw

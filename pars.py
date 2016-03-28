@@ -1,6 +1,6 @@
 #!/usr/bin/python
 """
-Python translation of pars.f from Prof. S Grimme's DFT-D3 correction
+Python version of pars.f from Grimme's Fortran distribution of DFT-D3
 """
 #######################################################################
 
