@@ -68,12 +68,19 @@ class getinData:
             if len(inlines[i].split()) == 0: break
             elif len(inlines[i].split()) == 4: self.CARTESIANS.append([float(inlines[i].split()[1]), float(inlines[i].split()[2]), float(inlines[i].split()[3])])
 
+      def getMETHOD(self, inlines):
+         self.FUNCTIONAL = "none"
+         # looks for a selected group of methods (some of my favourites...)
+         for i in range(0,len(inlines)):
+            if inlines[i].find("#") > -1:
+               if inlines[i].find("B3LYP") > -1 or inlines[i].find("b3lyp") > -1 : self.FUNCTIONAL = "B3LYP"
+
       def getBONDINDEX(self,inlines,natoms):
          conn=[]
          connectivity = 0
 
          for j in range(0,len(inlines)):
-            if "1 " in inlines[j]:
+            if " 1 " in inlines[j]:
                startconn = j
                connectivity  = 1
                break
@@ -98,6 +105,7 @@ class getinData:
       inlines = infile.readlines()
       getATOMTYPES(self, inlines)
       self.NATOMS=len(self.ATOMTYPES)
+      getMETHOD(self,inlines)
       getBONDINDEX(self,inlines,self.NATOMS)
       getCARTESIANS(self, inlines, self.NATOMS)
 
@@ -133,18 +141,18 @@ class getoutData:
                if anharmonic_geom==1:self.CARTESIANS.append([float(outlines[i].split()[2]),float(outlines[i].split()[3]),float(outlines[i].split()[4])])
 
       def getMETHOD(self, outlines):
-         self.FUNCTIONAL = []
+         self.FUNCTIONAL = "none"
          # looks for a selected group of methods (some of my favourites...)
          for i in range(0,len(outlines)):
-            if outlines[i].find("(B3LYP)") > -1: self.FUNCTIONAL = "B3LYP"
-            if outlines[i].find("(CAM-B3LYP)") > -1: self.FUNCTIONAL = "CAM-B3LYP"
-            if outlines[i].find("(B-P86)") > -1: self.FUNCTIONAL = "BP86"
-            if outlines[i].find("(B2PLYP)") > -1: self.FUNCTIONAL = "B2PLYP"
-            if outlines[i].find("(M06)") > -1: self.FUNCTIONAL = "M06"
-            if outlines[i].find("(M062X)") > -1: self.FUNCTIONAL = "M06-2X"
-            if outlines[i].find("(M06L)") > -1: self.FUNCTIONAL = "M06L"
-            if outlines[i].find("(B97D)") > -1: self.FUNCTIONAL = "B97D"
-            if outlines[i].find("(TPSS-TPSS)") > -1: self.FUNCTIONAL = "TPSS"
+            if outlines[i].find("B3LYP)") > -1: self.FUNCTIONAL = "B3LYP"
+            if outlines[i].find("CAM-B3LYP)") > -1: self.FUNCTIONAL = "CAM-B3LYP"
+            if outlines[i].find("B-P86)") > -1: self.FUNCTIONAL = "BP86"
+            if outlines[i].find("B2PLYP)") > -1: self.FUNCTIONAL = "B2PLYP"
+            if outlines[i].find("M06)") > -1: self.FUNCTIONAL = "M06"
+            if outlines[i].find("M062X)") > -1: self.FUNCTIONAL = "M06-2X"
+            if outlines[i].find("M06L)") > -1: self.FUNCTIONAL = "M06L"
+            if outlines[i].find("B97D)") > -1: self.FUNCTIONAL = "B97D"
+            if outlines[i].find("TPSS-TPSS)") > -1: self.FUNCTIONAL = "TPSS"
 
       if os.path.exists(file):outfile = open(file,"r")
       outlines = outfile.readlines()
