@@ -296,14 +296,22 @@ class calcD3:
                for parm in zero_parms:
                   if fileData.FUNCTIONAL == parm[0]:
                      [s6,rs6,s8] = parm[1:4]
-                     print "detected", parm[0], "functional - using default parameters"
+                     print "detected", parm[0], "functional - using default zero-damping parameters"
             else: print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
          else: print " manual parameters have been defined"
          print "   Zero-damping parameters:", "s6 =",s6, "rs6 =", rs6, "s8 =",s8
      
       if damp == "bj":
          print "\n   D3-dispersion correction with Becke_Johnson damping:",
-         print "   WARNING: Not yet implemented!\n"; sys.exit()
+         if s6 == 0.0 or s8 == 0.0 or a1 == 0.0 or a2 == 0.0:
+            if fileData.FUNCTIONAL != "none":
+               for parm in bj_parms:
+                  if fileData.FUNCTIONAL == parm[0]:
+                     [s6,s8,a1,a2] = parm[1:5]
+                     print "detected", parm[0], "functional - using default BJ-damping parameters"
+            else: print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
+         else: print " manual parameters have been defined"
+         print "   BJ-damping parameters:", "s6 =",s6, "s8 =", s8, "a1 =",a1, "a2 =",a2
 
       if abc == "off": print "   3-body term will not be calculated\n"
       else: print "   Including the Axilrod-Teller-Muto 3-body dispersion term\n"
@@ -355,9 +363,19 @@ class calcD3:
                   self.attractive_r6_term = -s6*C6jk*damp6/math.pow(dist,6)*autokcal*scalefactor
                   self.attractive_r8_term = -s8*C8jk*damp8/math.pow(dist,8)*autokcal*scalefactor
                
-                  if pairwise == "on" and scalefactor != 0:
-                     print "   --- Pairwise interaction between atoms", (j+1), "and", (k+1),": Edisp =", "%.6f" % (self.attractive_r6_term + self.attractive_r8_term), "kcal/mol"
-            
+               if damp == "bj":
+                  dist=totdist/autoang
+                  rr = r[atomA][atomB]/dist
+                  rr = math.pow((C8jk / C6jk), 0.5)
+                  tmp1 = a1 * rr + a2
+                  damp6 = math.pow(tmp1,6)
+                  damp8 = math.pow(tmp1,8)
+                  
+                  self.attractive_r6_term = -s6*C6jk/(math.pow(dist,6)+damp6)*autokcal*scalefactor
+                  self.attractive_r8_term = -s8*C8jk/(math.pow(dist,8)+damp8)*autokcal*scalefactor
+                  
+               if pairwise == "on" and scalefactor != 0: print "   --- Pairwise interaction between atoms", (j+1), "and", (k+1),": Edisp =", "%.6f" % (self.attractive_r6_term + self.attractive_r8_term), "kcal/mol"
+
                self.attractive_r6_vdw = self.attractive_r6_vdw + self.attractive_r6_term
                self.attractive_r8_vdw = self.attractive_r8_vdw + self.attractive_r8_term
 
@@ -426,11 +444,11 @@ if __name__ == "__main__":
          repulsive_abc = fileD3.repulsive_abc/autokcal
          total_vdw = attractive_r6_vdw + attractive_r8_vdw + repulsive_abc
          print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12),"    D3(3-body)".rjust(12), "    Total (au)".rjust(12)
-         print "  ",file.ljust(30), "   %.6f" % attractive_r6_vdw, "   %.6f" % attractive_r8_vdw,"   %.6f" % repulsive_abc, "   %.6f" % total_vdw, "\n"
+         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw,"   %.8f" % repulsive_abc, "   %.8f" % total_vdw, "\n"
 
       # Without 3-body term (default)
       else:
          total_vdw = attractive_r6_vdw + attractive_r8_vdw
          print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12)
-         print "  ",file.ljust(30), "   %.6f" % attractive_r6_vdw, "   %.6f" % attractive_r8_vdw, "   %.6f" % total_vdw, "\n"
+         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw, "   %.8f" % total_vdw, "\n"
 

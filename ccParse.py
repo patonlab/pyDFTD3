@@ -74,6 +74,7 @@ class getinData:
          for i in range(0,len(inlines)):
             if inlines[i].find("#") > -1:
                if inlines[i].find("B3LYP") > -1 or inlines[i].find("b3lyp") > -1 : self.FUNCTIONAL = "B3LYP"
+               if inlines[i].find("TPSSTPSS") > -1 or inlines[i].find("tpsstpss") > -1 : self.FUNCTIONAL = "TPSSTPSS"
 
       def getBONDINDEX(self,inlines,natoms):
          conn=[]
@@ -152,7 +153,7 @@ class getoutData:
             if outlines[i].find("M062X)") > -1: self.FUNCTIONAL = "M06-2X"
             if outlines[i].find("M06L)") > -1: self.FUNCTIONAL = "M06L"
             if outlines[i].find("B97D)") > -1: self.FUNCTIONAL = "B97D"
-            if outlines[i].find("TPSS-TPSS)") > -1: self.FUNCTIONAL = "TPSS"
+            if outlines[i].find("TPSS-TPSS)") > -1: self.FUNCTIONAL = "TPSSTPSS"
 
       if os.path.exists(file):outfile = open(file,"r")
       outlines = outfile.readlines()
