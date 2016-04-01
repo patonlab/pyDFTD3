@@ -1,7 +1,7 @@
 pyDFTD3
 ======
 
-## Usage ##
+Usage
 ```python
 python dftd3.py (-damp zero/bj) (-s6 val) (-rs6 val) (-s8 val) (-a1 val) (-a2 val) (-im on/off) (-pw on/off) file(s)
 ```
@@ -18,7 +18,7 @@ To view the pairwise contribution of all dispersion terms ```-pw on``` (default 
 
 To view only the intermolecular dispersion energy ```-im on``` (default is off, and requires the interatomic connectivity information to be specified in an input file so that there are two separate molecules) 
 
-## Examples ##
+Examples
 ------
 
 1. Specifying B3LYP params for an input file
@@ -36,5 +36,6 @@ o  Using default B3LYP D3 parameters: s6 = 1.0 rs6 =  1.261 s8 = 1.703
    Breakdown   Attractive-R6   Attractive-R8   Repulsive-3-Body   Total   (Hartree)
    CH3F2TS.log -0.000123819933174 -0.00219749682351 5.61353002398e-07 -0.00232075540368
 
-
+---
+License: [CC-BY](https://creativecommons.org/licenses/by/3.0/)
 
