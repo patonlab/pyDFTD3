@@ -69,7 +69,7 @@ class getinData:
             elif len(inlines[i].split()) == 4: self.CARTESIANS.append([float(inlines[i].split()[1]), float(inlines[i].split()[2]), float(inlines[i].split()[3])])
 
       def getMETHOD(self, inlines):
-         self.FUNCTIONAL = "none"
+         self.FUNCTIONAL = None
          # looks for a selected group of methods (some of my favourites...)
          for i in range(0,len(inlines)):
             if inlines[i].find("#") > -1:
@@ -142,7 +142,7 @@ class getoutData:
                if anharmonic_geom==1:self.CARTESIANS.append([float(outlines[i].split()[2]),float(outlines[i].split()[3]),float(outlines[i].split()[4])])
 
       def getMETHOD(self, outlines):
-         self.FUNCTIONAL = "none"
+         self.FUNCTIONAL = None
          # looks for a selected group of methods (some of my favourites...)
          for i in range(0,len(outlines)):
             if outlines[i].find("B3LYP)") > -1: self.FUNCTIONAL = "B3LYP"

@@ -292,7 +292,7 @@ class calcD3:
       if damp == "zero":
          print "\n   D3-dispersion correction with zero-damping:",
          if s6 == 0.0 or rs6 == 0.0 or s8 == 0.0:
-            if fileData.FUNCTIONAL != "none":
+            if fileData.FUNCTIONAL != None:
                for parm in zero_parms:
                   if fileData.FUNCTIONAL == parm[0]:
                      [s6,rs6,s8] = parm[1:4]
@@ -304,7 +304,7 @@ class calcD3:
       if damp == "bj":
          print "\n   D3-dispersion correction with Becke_Johnson damping:",
          if s6 == 0.0 or s8 == 0.0 or a1 == 0.0 or a2 == 0.0:
-            if fileData.FUNCTIONAL != "none":
+            if fileData.FUNCTIONAL != None:
                for parm in bj_parms:
                   if fileData.FUNCTIONAL == parm[0]:
                      [s6,s8,a1,a2] = parm[1:5]
