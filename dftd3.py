@@ -218,7 +218,7 @@ c6ab = copyc6(max_elem, maxc)
 elm=['H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar', 'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr', 'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe', 'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn', 'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr']
 
 ## Published parameters (S6, RS6, S8) for zero-damping optimized for different functionals
-zero_parms = [["B2PLYP",	0.6400,	1.4270,	1.0220],["B97",	1.0000,	0.8920,	0.9090],["B3LYP",	1.0000,	1.2610,	1.7030],["BLYP",	1.0000,	1.0940,	1.6820],["PBE1PBE",	1.0000,	1.2870,	0.9280],["TPSSTPSS",	1.0000,	1.1660,	1.1050],["PBEPBE",	1.0000,	1.2170,	0.7220],["BP86",	1.0000,	1.1390,	1.6830],["BPBE",	1.0000,	1.0870,	2.0330],["B3PW91",	1.0000,	1.1760,	1.7750],["BMK",	1.0000,	1.9310,	2.1680],["CAM-B3LYP",	1.0000,	1.3780,	1.2170],["LC-wPBE",	1.0000,	1.3550,	1.2790],["M05",	1.0000,	1.3730,	0.5950],["M052X",	1.0000,	1.4170,	0.0000],["M06L",	1.0000,	1.5810,	0.0000],["M06",	1.0000,	1.3250,	0.0000],["M062X",	1.0000,	1.6190,	0.0000],["M06HF",	1.0000,	1.4460,	0.0000]]
+zero_parms = [["B2PLYP",	0.6400,	1.4270,	1.0220],["B97",	1.0000,	0.8920,	0.9090],["B3LYP",	1.0000,	1.2610,	1.7030],["BLYP",	1.0000,	1.0940,	1.6820],["PBE1PBE",	1.0000,	1.2870,	0.9280],["TPSSTPSS",	1.0000,	1.1660,	1.1050],["PBEPBE",	1.0000,	1.2170,	0.7220],["BP86",	1.0000,	1.1390,	1.6830],["BPBE",	1.0000,	1.0870,	2.0330],["B3PW91",	1.0000,	1.1760,	1.7750],["BMK",	1.0000,	1.9310,	2.1680],["CAM-B3LYP",	1.0000,	1.3780,	1.2170],["LC-wPBE",	1.0000,	1.3550,	1.2790],["M05",	1.0000,	1.3730,	0.5950],["M052X",	1.0000,	1.4170,	0.0000],["M06L",	1.0000,	1.5810,	0.0000],["M06",	1.0000,	1.3250,	0.0000],["M06-2X",	1.0000,	1.6190,	0.0000],["M06HF",	1.0000,	1.4460,	0.0000]]
 
 ## Published parameters (S6, S8, a1, a2) for Becke-Johnson-damping optimized for different functionals
 bj_parms = [["B2PLYP",	0.6400,	0.9147,	0.3065,	5.0570],["B97",	1.0000,	2.2609,	0.5545,	3.2297],["B3LYP",	1.0000,	1.9889,	0.3981,	4.4211],["BLYP",	1.0000,	2.6996,	0.4298,	4.2359],["PBE1PBE",	1.0000,	1.2177,	0.4145,	4.8593],["TPSSTPSS",	1.0000,	1.9435,	0.4535,	4.4752],["PBEPBE",	1.0000,	0.7875,	0.4289,	4.4407],["BP86",	1.0000,	3.2822,	0.3946,	4.8516],["BPBE",	1.0000,	4.0728,	0.4567,	4.3908],["B3PW91",	1.0000,	2.8524,	0.4312,	4.4693],["BMK",	1.0000,	2.0860,	0.1940,	5.9197],["CAM-B3LYP",	1.0000,	2.0674,	0.3708,	5.4743],["LC-wPBE",	1.0000,	1.8541,	0.3919,	5.0897]]
@@ -265,8 +265,8 @@ class calcD3:
       cn = ncoord(natom, rcov, atomtype, xco, yco, zco, max_elem, autoang, k1, k2)
 
       ## C6 - Need to calculate these from fractional coordination
-      print "\n           R0(Ang)        CN"
-      print "   #########################"
+      #print "\n           R0(Ang)        CN"
+      #print "   #########################"
       x=0
       for j in range(0,natom):
          C6jj = getc6(maxc,max_elem,c6ab,mxc,atomtype,cn,j,j)
@@ -282,11 +282,11 @@ class calcD3:
 
          C8jj = 3.0*C6jj*math.pow(r2r4[z],2.0)
          C10jj=49.0/40.0 * math.pow(C8jj,2.0)/C6jj
-         print "  ",(j+1), atomtype[j], "   %.5f" % dum, "   %.5f" % cn[j] #, C6jj, C8jj, C10jj
-      print "   #########################"
+         #print "  ",(j+1), atomtype[j], "   %.5f" % dum, "   %.5f" % cn[j] #, C6jj, C8jj, C10jj
+      #print "   #########################"
 
       icomp = [0]*100000; cc6ab = [0]*100000; r2ab = [0]*100000; dmp = [0]*100000
-                            
+
       ## Compute and output the individual components of the D3 energy correction ##
       #print "\n   Atoms  Types  C6            C8            E6              E8"
       if damp == "zero":
@@ -300,7 +300,7 @@ class calcD3:
             else: print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
          else: print " manual parameters have been defined"
          print "   Zero-damping parameters:", "s6 =",s6, "rs6 =", rs6, "s8 =",s8
-     
+
       if damp == "bj":
          print "\n   D3-dispersion correction with Becke_Johnson damping:",
          if s6 == 0.0 or s8 == 0.0 or a1 == 0.0 or a2 == 0.0:
@@ -362,7 +362,7 @@ class calcD3:
 
                   self.attractive_r6_term = -s6*C6jk*damp6/math.pow(dist,6)*autokcal*scalefactor
                   self.attractive_r8_term = -s8*C8jk*damp8/math.pow(dist,8)*autokcal*scalefactor
-               
+
                if damp == "bj":
                   dist=totdist/autoang
                   rr = r[atomA][atomB]/dist
@@ -370,10 +370,10 @@ class calcD3:
                   tmp1 = a1 * rr + a2
                   damp6 = math.pow(tmp1,6)
                   damp8 = math.pow(tmp1,8)
-                  
+
                   self.attractive_r6_term = -s6*C6jk/(math.pow(dist,6)+damp6)*autokcal*scalefactor
                   self.attractive_r8_term = -s8*C8jk/(math.pow(dist,8)+damp8)*autokcal*scalefactor
-                  
+
                if pairwise == "on" and scalefactor != 0: print "   --- Pairwise interaction between atoms", (j+1), "and", (k+1),": Edisp =", "%.6f" % (self.attractive_r6_term + self.attractive_r8_term), "kcal/mol"
 
                self.attractive_r6_vdw = self.attractive_r6_vdw + self.attractive_r6_term
@@ -451,4 +451,3 @@ if __name__ == "__main__":
          total_vdw = attractive_r6_vdw + attractive_r8_vdw
          print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12)
          print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw, "   %.8f" % total_vdw, "\n"
-
