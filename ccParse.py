@@ -5,7 +5,7 @@
 #                Reads compchem job file(s)                   #
 ###############################################################
 
-#Python Libraries 
+#Python Libraries
 import subprocess, sys, os
 
 ## Check for integer when parsing ##
@@ -93,7 +93,7 @@ class getinData:
          for j in range(0,natoms):
             self.BONDINDEX.append([0])
             for k in range(0,natoms): self.BONDINDEX[j].append(0)
-         
+
          for j in range(0,natoms):
             if connectivity == 1:
                for bonded in conn[j].split():
@@ -127,7 +127,9 @@ class getoutData:
             if outlines[i].find("Input orientation") > -1: standor = i
             if outlines[i].find("Standard orientation") > -1: standor = i
             if outlines[i].find("Vib.Av.Geom.") > -1: standor = i; anharmonic_geom=1
-            if outlines[i].find("Rotational constants") > -1 and outlines[i-1].find("-------") > -1: self.NATOMS = i-standor-6
+            if outlines[i].find("Distance matrix") > -1 or outlines[i].find("Rotational constants") >-1:
+                if outlines[i-1].find("-------") > -1: self.NATOMS = i-standor-6
+                                                    
 
          try: standor
          except NameError: pass
@@ -143,17 +145,11 @@ class getoutData:
 
       def getMETHOD(self, outlines):
          self.FUNCTIONAL = None
-         # looks for a selected group of methods (some of my favourites...)
          for i in range(0,len(outlines)):
-            if outlines[i].find("B3LYP)") > -1: self.FUNCTIONAL = "B3LYP"
-            if outlines[i].find("CAM-B3LYP)") > -1: self.FUNCTIONAL = "CAM-B3LYP"
-            if outlines[i].find("B-P86)") > -1: self.FUNCTIONAL = "BP86"
-            if outlines[i].find("B2PLYP)") > -1: self.FUNCTIONAL = "B2PLYP"
-            if outlines[i].find("M06)") > -1: self.FUNCTIONAL = "M06"
-            if outlines[i].find("M062X)") > -1: self.FUNCTIONAL = "M06-2X"
-            if outlines[i].find("M06L)") > -1: self.FUNCTIONAL = "M06L"
-            if outlines[i].find("B97D)") > -1: self.FUNCTIONAL = "B97D"
-            if outlines[i].find("TPSS-TPSS)") > -1: self.FUNCTIONAL = "TPSSTPSS"
+             if outlines[i].strip().find('\GINC') > -1:
+                 if len(outlines[i].strip().split("\\")) > 5:
+                     func = outlines[i].strip().split("\\")[4]
+                     self.FUNCTIONAL = (func[1:])
 
       if os.path.exists(file):outfile = open(file,"r")
       outlines = outfile.readlines()

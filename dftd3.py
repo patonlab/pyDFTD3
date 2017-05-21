@@ -214,14 +214,7 @@ def lin(i1,i2):
 ## Get from pars.py
 c6ab = copyc6(max_elem, maxc)
 
-## The periodic table...
-elm=['H', 'He', 'Li', 'Be', 'B', 'C', 'N', 'O', 'F', 'Ne', 'Na', 'Mg', 'Al', 'Si', 'P', 'S', 'Cl', 'Ar', 'K', 'Ca', 'Sc', 'Ti', 'V', 'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn', 'Ga', 'Ge', 'As', 'Se', 'Br', 'Kr', 'Rb', 'Sr', 'Y', 'Zr', 'Nb', 'Mo', 'Tc', 'Ru', 'Rh', 'Pd', 'Ag', 'Cd', 'In', 'Sn', 'Sb', 'Te', 'I', 'Xe', 'Cs', 'Ba', 'La', 'Ce', 'Pr', 'Nd', 'Pm', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Ho', 'Er', 'Tm', 'Yb', 'Lu', 'Hf', 'Ta', 'W', 'Re', 'Os', 'Ir', 'Pt', 'Au', 'Hg', 'Tl', 'Pb', 'Bi', 'Po', 'At', 'Rn', 'Fr', 'Ra', 'Ac', 'Th', 'Pa', 'U', 'Np', 'Pu', 'Am', 'Cm', 'Bk', 'Cf', 'Es', 'Fm', 'Md', 'No', 'Lr']
-
-## Published parameters (S6, RS6, S8) for zero-damping optimized for different functionals
-zero_parms = [["B2PLYP",	0.6400,	1.4270,	1.0220],["B97",	1.0000,	0.8920,	0.9090],["B3LYP",	1.0000,	1.2610,	1.7030],["BLYP",	1.0000,	1.0940,	1.6820],["PBE1PBE",	1.0000,	1.2870,	0.9280],["TPSSTPSS",	1.0000,	1.1660,	1.1050],["PBEPBE",	1.0000,	1.2170,	0.7220],["BP86",	1.0000,	1.1390,	1.6830],["BPBE",	1.0000,	1.0870,	2.0330],["B3PW91",	1.0000,	1.1760,	1.7750],["BMK",	1.0000,	1.9310,	2.1680],["CAM-B3LYP",	1.0000,	1.3780,	1.2170],["LC-wPBE",	1.0000,	1.3550,	1.2790],["M05",	1.0000,	1.3730,	0.5950],["M052X",	1.0000,	1.4170,	0.0000],["M06L",	1.0000,	1.5810,	0.0000],["M06",	1.0000,	1.3250,	0.0000],["M06-2X",	1.0000,	1.6190,	0.0000],["M06HF",	1.0000,	1.4460,	0.0000]]
-
-## Published parameters (S6, S8, a1, a2) for Becke-Johnson-damping optimized for different functionals
-bj_parms = [["B2PLYP",	0.6400,	0.9147,	0.3065,	5.0570],["B97",	1.0000,	2.2609,	0.5545,	3.2297],["B3LYP",	1.0000,	1.9889,	0.3981,	4.4211],["BLYP",	1.0000,	2.6996,	0.4298,	4.2359],["PBE1PBE",	1.0000,	1.2177,	0.4145,	4.8593],["TPSSTPSS",	1.0000,	1.9435,	0.4535,	4.4752],["PBEPBE",	1.0000,	0.7875,	0.4289,	4.4407],["BP86",	1.0000,	3.2822,	0.3946,	4.8516],["BPBE",	1.0000,	4.0728,	0.4567,	4.3908],["B3PW91",	1.0000,	2.8524,	0.4312,	4.4693],["BMK",	1.0000,	2.0860,	0.1940,	5.9197],["CAM-B3LYP",	1.0000,	2.0674,	0.3708,	5.4743],["LC-wPBE",	1.0000,	1.8541,	0.3919,	5.0897]]
+#verbose = None
 
 ## The computation of the D3 dispersion correction
 class calcD3:
@@ -290,32 +283,38 @@ class calcD3:
       ## Compute and output the individual components of the D3 energy correction ##
       #print "\n   Atoms  Types  C6            C8            E6              E8"
       if damp == "zero":
-         print "\n   D3-dispersion correction with zero-damping:",
+         if verbose: print "\n   D3-dispersion correction with zero-damping:",
          if s6 == 0.0 or rs6 == 0.0 or s8 == 0.0:
             if fileData.FUNCTIONAL != None:
                for parm in zero_parms:
                   if fileData.FUNCTIONAL == parm[0]:
                      [s6,rs6,s8] = parm[1:4]
-                     print "detected", parm[0], "functional - using default zero-damping parameters"
-            else: print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
-         else: print " manual parameters have been defined"
-         print "   Zero-damping parameters:", "s6 =",s6, "rs6 =", rs6, "s8 =",s8
+                     if verbose: print "detected", parm[0], "functional - using default zero-damping parameters"
+            else:
+                if verbose:
+                    print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
+         else:
+             if verbose: print " manual parameters have been defined"
+         if verbose: print "   Zero-damping parameters:", "s6 =",s6, "rs6 =", rs6, "s8 =",s8
 
       if damp == "bj":
-         print "\n   D3-dispersion correction with Becke_Johnson damping:",
+         if verbose: print "\n   D3-dispersion correction with Becke_Johnson damping:",
          if s6 == 0.0 or s8 == 0.0 or a1 == 0.0 or a2 == 0.0:
             if fileData.FUNCTIONAL != None:
                for parm in bj_parms:
                   if fileData.FUNCTIONAL == parm[0]:
                      [s6,s8,a1,a2] = parm[1:5]
-                     print "detected", parm[0], "functional - using default BJ-damping parameters"
-            else: print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
-         else: print " manual parameters have been defined"
-         print "   BJ-damping parameters:", "s6 =",s6, "s8 =", s8, "a1 =",a1, "a2 =",a2
+                     if verbose: print "detected", parm[0], "functional - using default BJ-damping parameters"
+            else:
+                if verbose: print "   WARNING: Damping parameters not specified and no functional could be read!\n"; sys.exit()
+         else:
+             if verbose: print " manual parameters have been defined"
+         if verbose: print "   BJ-damping parameters:", "s6 =",s6, "s8 =", s8, "a1 =",a1, "a2 =",a2
 
-      if abc == "off": print "   3-body term will not be calculated\n"
-      else: print "   Including the Axilrod-Teller-Muto 3-body dispersion term\n"
-      if intermolecular == "on": print "   Only computing intermolecular dispersion interactions! This is not the total D3-correction\n"
+      if verbose:
+          if abc == "off": print "   3-body term will not be calculated\n"
+          else: print "   Including the Axilrod-Teller-Muto 3-body dispersion term\n"
+          if intermolecular == "on": print "   Only computing intermolecular dispersion interactions! This is not the total D3-correction\n"
 
       for j in range(0,natom):
          ## This could be used to 'switch off' dispersion between bonded or geminal atoms ##
@@ -415,11 +414,12 @@ class calcD3:
 if __name__ == "__main__":
    # Takes arguments: (1) damping style, (2) s6, (3) rs6, (4) s8, (5) 3-body on/off, (6) input file(s)
    files = []
-   damp = "zero"; s6 = 0.0; rs6 = 0.0; s8 = 0.0; bj_a1 = 0.0; bj_a2 = 0.0; abc_term = "off"; intermolecular = "off"; pairwise = "off"
+   verbose = "True"; damp = "zero"; s6 = 0.0; rs6 = 0.0; s8 = 0.0; bj_a1 = 0.0; bj_a2 = 0.0; abc_term = "off"; intermolecular = "off"; pairwise = "off"
    if len(sys.argv) > 1:
       for i in range(1,len(sys.argv)):
          if sys.argv[i] == "-damp": damp = (sys.argv[i+1])
          elif sys.argv[i] == "-s6": s6 = float(sys.argv[i+1])
+         elif sys.argv[i] == "-terse": verbose = False
          elif sys.argv[i] == "-rs6": rs6 = float(sys.argv[i+1])
          elif sys.argv[i] == "-s8": s8 = float(sys.argv[i+1])
          elif sys.argv[i] == "-a1": bj_a1 = float(sys.argv[i+1])
@@ -443,11 +443,11 @@ if __name__ == "__main__":
       if abc_term == "on":
          repulsive_abc = fileD3.repulsive_abc/autokcal
          total_vdw = attractive_r6_vdw + attractive_r8_vdw + repulsive_abc
-         print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12),"    D3(3-body)".rjust(12), "    Total (au)".rjust(12)
-         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw,"   %.8f" % repulsive_abc, "   %.8f" % total_vdw, "\n"
+         if verbose: print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12),"    D3(3-body)".rjust(12), "    Total (au)".rjust(12)
+         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw,"   %.8f" % repulsive_abc, "   %.8f" % total_vdw
 
       # Without 3-body term (default)
       else:
          total_vdw = attractive_r6_vdw + attractive_r8_vdw
-         print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12)
-         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw, "   %.8f" % total_vdw, "\n"
+         if verbose: print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12)
+         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw, "   %.8f" % total_vdw
