@@ -24,20 +24,21 @@ def elementID(massno):
 #Read Cartesian coordinate data from a PDB file
 class getpdbData:
    def __init__(self, file):
-      if not os.path.exists(file+".pdb"):
+      if not os.path.exists(file):
          print ("\nFATAL ERROR: Input file [ %s ] does not exist"%file); sys.exit()
 
       def getATOMS(self, inlines):
          self.ATOMTYPES = []
          self.CARTESIANS = []
          for i in range(0,len(inlines)):
-            if inlines[i].find("ATOM") > -1:
-               self.ATOMTYPES.append(int(inlines[i].split()[1]))
-               self.CARTESIANS.append(float(inlines[i].split()[2:4]))
+            if inlines[i].find("ATOM") > -1 or inlines[i].find("HETATM") > -1:
+               self.ATOMTYPES.append((inlines[i].split()[2]))
+               self.CARTESIANS.append([float(inlines[i].split()[4]),float(inlines[i].split()[5]),float(inlines[i].split()[6])])
 
-      infile = open(file+".pdb","r")
+      infile = open(file,"r")
       inlines = infile.readlines()
       getATOMS(self, inlines)
+      self.FUNCTIONAL = None
 
 
 #Read Cartesian data from a Gaussian formatted input file (*.com or *.gjf)
@@ -129,7 +130,7 @@ class getoutData:
             if outlines[i].find("Vib.Av.Geom.") > -1: standor = i; anharmonic_geom=1
             if outlines[i].find("Distance matrix") > -1 or outlines[i].find("Rotational constants") >-1:
                 if outlines[i-1].find("-------") > -1: self.NATOMS = i-standor-6
-                                                    
+
 
          try: standor
          except NameError: pass

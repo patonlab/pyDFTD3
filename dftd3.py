@@ -218,10 +218,11 @@ c6ab = copyc6(max_elem, maxc)
 
 ## The computation of the D3 dispersion correction
 class calcD3:
-   def __init__(self, file, s6, rs6, s8, a1, a2, damp, abc, intermolecular, pairwise):
+   def __init__(self, file, s6, rs6, s8, a1, a2, damp, abc, intermolecular, pairwise, verbose):
 
       ## Use ccParse to get the Cartesian coordinates from Gaussian input/output files
       if len(file.split(".com"))>1 or len(file.split(".gjf"))>1: fileData = getinData(file)
+      if len(file.split(".pdb"))>1: fileData = getpdbData(file)
       if len(file.split(".out"))>1 or len(file.split(".log"))>1: fileData = getoutData(file)
 
       ## Arrays for atoms and Cartesian coordinates ##
@@ -419,7 +420,7 @@ if __name__ == "__main__":
       for i in range(1,len(sys.argv)):
          if sys.argv[i] == "-damp": damp = (sys.argv[i+1])
          elif sys.argv[i] == "-s6": s6 = float(sys.argv[i+1])
-         elif sys.argv[i] == "-terse": verbose = False
+         elif sys.argv[i] == "-terse": verbose = None
          elif sys.argv[i] == "-rs6": rs6 = float(sys.argv[i+1])
          elif sys.argv[i] == "-s8": s8 = float(sys.argv[i+1])
          elif sys.argv[i] == "-a1": bj_a1 = float(sys.argv[i+1])
@@ -429,13 +430,13 @@ if __name__ == "__main__":
          elif sys.argv[i] == "-pw": pairwise = (sys.argv[i+1])
          else:
             if len(sys.argv[i].split(".")) > 1:
-               if sys.argv[i].split(".")[1] == "out" or sys.argv[i].split(".")[1] == "log" or sys.argv[i].split(".")[1] == "com" or sys.argv[i].split(".")[1] == "gjf":
+               if sys.argv[i].split(".")[1] == "out" or sys.argv[i].split(".")[1] == "log" or sys.argv[i].split(".")[1] == "com" or sys.argv[i].split(".")[1] == "gjf" or sys.argv[i].split(".")[1] == "pdb":
                   files.append(sys.argv[i])
 
    else: print "\nWrong number of arguments used. Correct format: dftd3.py (-damp zero/bj) (-s6 val) (-rs6 val) (-s8 val) (-a1 val) (-a2 val) (-im on/off) (-pw on/off)file(s)\n"; sys.exit()
 
    for file in files:
-      fileD3 = calcD3(file, s6, rs6, s8, bj_a1, bj_a2, damp, abc_term, intermolecular, pairwise)
+      fileD3 = calcD3(file, s6, rs6, s8, bj_a1, bj_a2, damp, abc_term, intermolecular, pairwise, verbose)
       attractive_r6_vdw = fileD3.attractive_r6_vdw/autokcal
       attractive_r8_vdw = fileD3.attractive_r8_vdw/autokcal
 
@@ -450,4 +451,4 @@ if __name__ == "__main__":
       else:
          total_vdw = attractive_r6_vdw + attractive_r8_vdw
          if verbose: print "\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12)
-         print "  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw, "   %.8f" % total_vdw
+         print "  ",file.ljust(30), "   %.18f" % attractive_r6_vdw, "   %.18f" % attractive_r8_vdw, "   %.18f" % total_vdw
