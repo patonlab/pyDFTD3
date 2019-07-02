@@ -413,7 +413,7 @@ class calcD3:
       self.repulsive_abc_term = s6 * e63 * autokcal
       self.repulsive_abc = self.repulsive_abc + self.repulsive_abc_term
 
-if __name__ == "__main__":
+def main():
    # Takes arguments: (1) damping style, (2) s6, (3) rs6, (4) s8, (5) 3-body on/off, (6) input file(s)
    files = []
    verbose = True; damp = "zero"; s6 = 0.0; rs6 = 0.0; s8 = 0.0; bj_a1 = 0.0; bj_a2 = 0.0; abc_term = False; intermolecular = False; pairwise = False
@@ -458,3 +458,6 @@ if __name__ == "__main__":
          total_vdw = attractive_r6_vdw + attractive_r8_vdw
          if verbose: print("\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12))
          print("  ",file.ljust(30), "   %.18f" % attractive_r6_vdw, "   %.18f" % attractive_r8_vdw, "   %.18f" % total_vdw)
+
+if __name__ == "__main__":
+    main()
