@@ -1,5 +1,4 @@
-pyDFTD3
-======
+![pyDFTD3 logo](pyDFTD3_banner.png)
 
 This program will compute the Grimme D3-dispersion energy for a set of atomic Cartesian coordinates. This version implements both versions of short-range damping that appear in the literature (i.e., zero-damping and Becke-Johnson damping) provided the required parameters are specified manually, or the density functional can be automatically recognized from a Gaussian formatted output file - in which case default values will be used. This program was developed to analyze interatomic and intermolecular dispersion energies within the D3-scheme: if two molecules are recognized based on the interatomic connectivity then it is possible to ignore intramolecular terms.
 
