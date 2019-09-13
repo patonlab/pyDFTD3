@@ -224,14 +224,18 @@ c6ab = copyc6(max_elem, maxc)
 ## The computation of the D3 dispersion correction
 class calcD3:
    def __init__(self, fileData, functional, s6, rs6, s8, a1, a2, damp, abc, intermolecular, pairwise, verbose):
-
-
+      #verbose = True
       ## Arrays for atoms and Cartesian coordinates ##
-      atomtype = fileData.ATOMTYPES
+      try: 
+         atomtype = fileData.ATOMTYPES
+         cartesians = fileData.CARTESIANS
+      except: 
+         atomtype = fileData.atom_types
+         cartesians = fileData.cartesians
       natom = len(atomtype)
 
       xco=[]; yco=[]; zco=[]
-      for at in fileData.CARTESIANS:
+      for at in cartesians:
          xco.append(at[0]); yco.append(at[1]); zco.append(at[2])
 
       ## In case something clever needs to be done wrt inter and intramolecular interactions
