@@ -79,4 +79,4 @@ Structure files available in the examples directory
 ```
 
 ---
-License: [CC-BY](https://creativecommons.org/licenses/by/3.0/)
+License: [MIT](https://opensource.org/licenses/MIT)
