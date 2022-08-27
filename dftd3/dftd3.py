@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# -*- coding: utf-8 -*-
 from __future__ import print_function, absolute_import
 
 # THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
@@ -35,13 +36,11 @@ try:
     from .pars import *
 except:
     from pars import *
-# For reading Gaussian formatted input/output files
-try:
-    from .ccParse import *
-except:
-    from ccParse import *
+
 #Python libararies
 import random, sys, os, subprocess, string, math
+from argparse import ArgumentParser
+from cclib.io import ccread
 
 ## Check for integer when parsing ##
 def is_number(s):
@@ -79,27 +78,53 @@ max_elem = 94
 ## maximum connectivity
 maxc = 5
 
-## From connectivity, establish if there is more than one molecule
-def getMollist(bondmatrix,startatom):
-   # The list of atoms in a molecule
-   atomlist=[]
-   atomlist.append(startatom)
-   molecule1=[]
-   nextlot=[]
-   count = 0
+FUNC_LIST = ["B1B95","B2GPPLYP","B3LYP","BHLYP","BLYP","BP86","BPBE","mPWLYP","PBE","PBE0","PW6B95","PWB6K","revPBE","TPSS","TPSS0","TPSSh","BOP","MPW1B95","MPWB1K","OLYP","OPBE","oTPSS","PBE38","PBEsol","REVSSB","SSB","B3PW91","BMK","CAMB3LYP","LCwPBE","M052X","M05","M062X","M06HF","M06L","M06","HCTH120","B2PLYP","DSDBLYP","TPSS","PWPB95","revPBE0","revPBE38","rPW86PBE"]
+SUPPORTED_EXTENSIONS = set(('out', 'log', 'sdf', 'xyz', 'pdb', 'sdf'))
 
-   while count<100:
-      nextlot=[]
-      for atom in atomlist:
-         for i in range(0,len(bondmatrix[atom])):
-            if bondmatrix[atom][i] == 1:
-               alreadyfound = 0
-               for at in atomlist:
-                  if i == at: alreadyfound = 1
-               if alreadyfound == 0: atomlist.append(i)
-      count=count+1
+# Some useful arrays
+periodictable = ["", "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si",
+                 "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
+                 "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd",
+                 "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm",
+                 "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt",
+                 "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu",
+                 "Am", "Cm", "Bk", "Cf", "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
+                 "Rg", "Uub", "Uut", "Uuq", "Uup", "Uuh", "Uus", "Uuo"]
 
-   return atomlist
+
+def parseIntSet(nputstr=""):
+    """
+    Used to interpret a range of integers supplied at input (used to define fragment atoms)
+    For example, the string '1-4, 7-9' will be expanded into a list of ints [1,2,3,4,7,8,9]
+    """
+    selection, invalid = set(), set()
+
+    # tokens are comma seperated values
+    tokens = [x.strip() for x in nputstr.split(',')]
+    for i in tokens:
+        if len(i) > 0:
+            if i[:1] == "<":
+                i = "1-%s"%(i[1:])
+        try:
+            # typically tokens are plain old integers
+            selection.add(int(i))
+        except:
+            # if not, then it might be a range
+            try:
+                token = [int(k.strip()) for k in i.split('-')]
+                if len(token) > 1:
+                    token.sort()
+                    first = token[0]
+                    last = token[len(token)-1]
+                    for x in range(first, last+1):
+                        selection.add(x)
+            except:
+                # not an int and not a range...
+                invalid.add(i)
+    # Report invalid tokens before returning valid selection
+    if len(invalid) > 0:
+        print("Invalid set: " + str(invalid))
+    return selection
 
 ## DFT derived values for diatomic cutoff radii from Grimme ##
 ## These are read from pars.py and converted from atomic units into Angstrom
@@ -223,29 +248,16 @@ c6ab = copyc6(max_elem, maxc)
 
 ## The computation of the D3 dispersion correction
 class calcD3:
-   def __init__(self, fileData, functional, s6, rs6, s8, a1, a2, damp, abc, intermolecular, pairwise, verbose):
-      #verbose = True
-      ## Arrays for atoms and Cartesian coordinates ##
-      try: 
-         atomtype = fileData.ATOMTYPES
-         cartesians = fileData.CARTESIANS
-      except: 
-         atomtype = fileData.atom_types
-         cartesians = fileData.cartesians
+   def __init__(self, fileData, functional, damp='zero', s6=0.0, rs6=0.0, s8=0.0, a1=0.0, a2=0.0, abc=False, intermolecular=False, pairwise=False, verbose=False):
+
+      atom_nums = fileData.atomnos.tolist()
+      atomtype = [periodictable[atno] for atno in atom_nums]
+      cartesians = fileData.atomcoords[-1].tolist()
       natom = len(atomtype)
 
       xco=[]; yco=[]; zco=[]
       for at in cartesians:
          xco.append(at[0]); yco.append(at[1]); zco.append(at[2])
-
-      ## In case something clever needs to be done wrt inter and intramolecular interactions
-      if hasattr(fileData,"BONDINDEX"):
-         molAatoms = getMollist(fileData.BONDINDEX,0)
-         mols = []
-         for j in range(0,natom):
-            mols.append(0)
-            for atom in molAatoms:
-               if atom == j: mols[j] = 1
 
       ## Names are pretty obvious...
       self.attractive_r6_vdw = 0.0; self.attractive_r8_vdw = 0.0; self.repulsive_abc = 0.0
@@ -298,7 +310,7 @@ class calcD3:
                      if verbose: print("detected", parm[0], "functional - using default zero-damping parameters")
             else:
                 if verbose:
-                    print("   WARNING: Damping parameters not specified and no functional could be read!\n"); sys.exit()
+                    print("   WARNING: No functional information could be read!\n")
          else:
              if verbose: print(" manual parameters have been defined")
          if verbose: print("   Zero-damping parameters:", "s6 =",s6, "rs6 =", rs6, "s8 =",s8)
@@ -312,7 +324,7 @@ class calcD3:
                      [s6,a1,s8,a2] = parm[1:5]
                      if verbose: print("detected", parm[0], "functional - using default BJ-damping parameters")
             else:
-                if verbose: print("   WARNING: Damping parameters not specified and no functional could be read!\n"); sys.exit()
+                if verbose: print("   WARNING: No functional information could be read!\n")
          else:
              if verbose: print(" manual parameters have been defined")
          if verbose: print("   BJ-damping parameters:", "s6 =",s6, "s8 =", s8, "a1 =",a1, "a2 =",a2)
@@ -322,23 +334,22 @@ class calcD3:
           else: print("   Including the Axilrod-Teller-Muto 3-body dispersion term\n")
           if intermolecular == True: print("   Only computing intermolecular dispersion interactions! This is not the total D3-correction\n")
 
+      if intermolecular != False:
+         mols = [0] * natom
+         assign = [parseIntSet(im) for im in intermolecular.split(':')]
+         for j, asn in enumerate(assign):
+             for at in asn:
+                 mols[int(at)-1] = j
+
+      # loop over atom pairs
       for j in range(0,natom):
-         ## This could be used to 'switch off' dispersion between bonded or geminal atoms ##
-         scaling = False
          for k in range(j+1,natom):
             scalefactor=1.0
 
-            if intermolecular == True:
+            if intermolecular != False:
                if mols[j] == mols[k]:
                   scalefactor = 0
-                  print("   --- Ignoring interaction between atoms",(j+1), "and", (k+1))
-
-            if scaling==True and hasattr(fileData,"BONDINDEX"):
-               if fileData.BONDINDEX[j][k]==1: scalefactor = 0
-               for l in range (0,natom):
-                  if fileData.BONDINDEX[j][l] != 0 and fileData.BONDINDEX[k][l]!=0 and j!=k and fileData.BONDINDEX[j][k]==0: scalefactor = 0
-                  for m in range (0,natom):
-                          if fileData.BONDINDEX[j][l] != 0 and fileData.BONDINDEX[l][m]!=0 and fileData.BONDINDEX[k][m]!=0 and j!=m and k!=l and fileData.BONDINDEX[j][m]==0: scalefactor=1/1.2
+                  if verbose: print("   --- Ignoring interaction between atoms",(j+1), "and", (k+1))
 
             if k>j:
                ## Pythagoras in 3D to work out distance ##
@@ -418,50 +429,74 @@ class calcD3:
       self.repulsive_abc = self.repulsive_abc + self.repulsive_abc_term
 
 def main():
-   # Takes arguments: (1) damping style, (2) s6, (3) rs6, (4) s8, (5) 3-body on/off, (6) input file(s)
-   files = []
-   verbose = True; damp = "zero"; s6 = 0.0; rs6 = 0.0; s8 = 0.0; bj_a1 = 0.0; bj_a2 = 0.0; abc_term = False; intermolecular = False; pairwise = False
-   if len(sys.argv) > 1:
-      for i in range(1,len(sys.argv)):
-         if sys.argv[i] == "-damp": damp = (sys.argv[i+1])
-         elif sys.argv[i] == "-s6": s6 = float(sys.argv[i+1])
-         elif sys.argv[i] == "-terse": verbose = False
-         elif sys.argv[i] == "-rs6": rs6 = float(sys.argv[i+1])
-         elif sys.argv[i] == "-s8": s8 = float(sys.argv[i+1])
-         elif sys.argv[i] == "-a1": bj_a1 = float(sys.argv[i+1])
-         elif sys.argv[i] == "-a2": bj_a2 = float(sys.argv[i+1])
-         elif sys.argv[i] == "-3body": abc_term = True
-         elif sys.argv[i] == "-im": intermolecular = True
-         elif sys.argv[i] == "-pw": pairwise = True
-         else:
-            if len(sys.argv[i].split(".")) > 1:
-               if sys.argv[i].split(".")[1] == "out" or sys.argv[i].split(".")[1] == "log" or sys.argv[i].split(".")[1] == "com" or sys.argv[i].split(".")[1] == "gjf" or sys.argv[i].split(".")[1] == "pdb":
-                  files.append(sys.argv[i])
+    parser = ArgumentParser()
+    parser.add_argument("-v", dest="verbose", action="store_true", default=False, help="Turn on verbose printing")
+    parser.add_argument("--damp", dest="damp", default="zero", type=str.lower, choices=('zero', 'bj'),
+                        help="Type of D3-damping function (zero, bj)")
+    parser.add_argument("--func", dest="functional", default=None,
+                        help="Use default D3 parameters for this density functional")
+    parser.add_argument("--s6", dest="s6", default=0.0, type=float, help="s6 parameter (used in zero and bj damping)")
+    parser.add_argument("--rs6", dest="rs6", default=0.0, type=float, help="rs6 parameter used in zero damping")
+    parser.add_argument("--s8", dest="s8", default=0.0, type=float, help="s8 parameter used in zero damping")
+    parser.add_argument("--a1", dest="a1", default=0.0, type=float, help="a1 parameter used in bj damping")
+    parser.add_argument("--kcal", dest="kcal", action="store_true", default=False, help="Print energies in kcal/mol")
+    parser.add_argument("--a2", dest="a2", default=0.0, type=float, help="a2 parameter used in bj damping")
+    parser.add_argument("--3body", dest="threebody", action="store_true", default=False, help="Turn on repulsive 3-body term")
+    parser.add_argument("--pw", dest="pairwise", action="store_true", default=False,
+                        help="Print dispersion terms between all interatomic pairs")
+    parser.add_argument("--im", dest="intermolecular", type=str, default=False,
+                        help="Compute only intermolecular dispersion terms")
 
-   else: print("\nWrong number of arguments used. Correct format: dftd3.py (-damp zero/bj) (-s6 val) (-rs6 val) (-s8 val) (-a1 val) (-a2 val) (-im on/off) (-pw on/off)file(s)\n"); sys.exit()
+    # Parse Arguments
+    (options, args) = parser.parse_known_args()
 
-   for file in files:
-      ## Use ccParse to get the Cartesian coordinates from Gaussian input/output files
-      if len(file.split(".com"))>1 or len(file.split(".gjf"))>1: fileData = getinData(file)
-      if len(file.split(".pdb"))>1: fileData = getpdbData(file)
-      if len(file.split(".out"))>1 or len(file.split(".log"))>1: fileData = getoutData(file)
-      fileD3 = calcD3(fileData, fileData.FUNCTIONAL, s6, rs6, s8, bj_a1, bj_a2, damp, abc_term, intermolecular, pairwise, verbose)
+    dft_functional = None
+    if options.functional is not None:
+        if options.functional in FUNC_LIST: dft_functional = options.functional
+        else: print("\nUnable to match requested functional {} to stored parameters!\n".format(options.functional)); sys.exit()
 
-      attractive_r6_vdw = fileD3.attractive_r6_vdw/autokcal
-      attractive_r8_vdw = fileD3.attractive_r8_vdw/autokcal
+    files = []
+    for argv in sys.argv:
+        if len(argv.split(".")) > 1:
+            if argv.split(".")[-1] in SUPPORTED_EXTENSIONS:
+                files.append(argv)
+    if len(files)==0:
+        print("\nNo valid files found!\n"); sys.exit()
 
-      # Output includes 3-body term
-      if abc_term == True:
-         repulsive_abc = fileD3.repulsive_abc/autokcal
-         total_vdw = attractive_r6_vdw + attractive_r8_vdw + repulsive_abc
-         if verbose: print("\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12),"    D3(3-body)".rjust(12), "    Total (au)".rjust(12))
-         print("  ",file.ljust(30), "   %.8f" % attractive_r6_vdw, "   %.8f" % attractive_r8_vdw,"   %.8f" % repulsive_abc, "   %.8f" % total_vdw)
+    for file in files:
+        try:
+            data = ccread(file)
 
-      # Without 3-body term (default)
-      else:
-         total_vdw = attractive_r6_vdw + attractive_r8_vdw
-         if verbose: print("\n", " ".rjust(30), "    D3(R6)".rjust(12), "    D3(R8)".rjust(12), "    Total (au)".rjust(12))
-         print("  ",file.ljust(30), "   %.18f" % attractive_r6_vdw, "   %.18f" % attractive_r8_vdw, "   %.18f" % total_vdw)
+            if dft_functional == None:
+                try:
+                    if data.metadata['functional'] in FUNC_LIST: dft_functional = data.metadata['functional']
+                except: pass
+
+            fileD3 = calcD3(data, dft_functional, options.damp, options.s6, options.rs6, options.s8, options.a1, options.a2, options.threebody, options.intermolecular, options.pairwise, options.verbose)
+
+            if not options.kcal:
+                c6_term = fileD3.attractive_r6_vdw/autokcal
+                c8_term = fileD3.attractive_r8_vdw/autokcal
+                threebody_term = fileD3.repulsive_abc/autokcal
+
+            else:
+                c6_term = fileD3.attractive_r6_vdw
+                c8_term = fileD3.attractive_r8_vdw
+                threebody_term = fileD3.repulsive_abc
+
+            # Output includes 3-body term
+            if options.threebody == True:
+                total_vdw = c6_term + c8_term + threebody_term
+                if options.verbose: print('   {:<30} {:>13} {:>13} {:>13}'.format("Species", "D3(R6)", "D3(R8)", "3-body", "Total"))
+                print('   {:<30} {:13.6f} {:13.6f} {:13.6f} {:13.6f}'.format(file, c6_term, c8_term, threebody_term, total_vdw))
+
+            # Without 3-body term (default)
+            else:
+                total_vdw = c6_term + c8_term
+                if options.verbose: print('   {:<30} {:>13} {:>13} {:>13}'.format("Species", "D3(R6)", " D3(R8)", "Total"))
+                print('   {:<30} {:13.6f} {:13.6f} {:13.6f}'.format(file, c6_term, c8_term, total_vdw))
+        except: pass
+    print()
 
 if __name__ == "__main__":
     main()
