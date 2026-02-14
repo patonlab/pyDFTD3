@@ -24,6 +24,7 @@ from dftd3.dftd3 import (
     _ncoord,
     _r,
     _r2r4,
+    read_file,
 )
 from dftd3.pars import bj_parms, d4_parms, elements, resolve_functional, zero_parms
 
@@ -430,3 +431,71 @@ class TestFragmentDetection:
             result_total.attractive_r6_vdw, abs=1e-10)
         assert result_im.attractive_r8_vdw == pytest.approx(
             result_total.attractive_r8_vdw, abs=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Cross-program validation: ORCA and Q-Chem reference values for ibuprofen
+#
+# These tests verify pyDFTD3 reproduces D3 dispersion energies computed by
+# ORCA and Q-Chem for ibuprofen geometries optimised with each program.
+# ---------------------------------------------------------------------------
+
+class TestCrossProgramValidation:
+    """Validate pyDFTD3 against ORCA and Q-Chem D3 reference values."""
+
+    # -- PBE / D3(0) from ORCA --
+
+    def test_ibuprofen_pbe_zero_orca_e6(self):
+        """ORCA PBE/D3(0): E6 = -5.330527244 kcal/mol."""
+        data = read_file(_example("ibuprofen_pbe_orca.out"))
+        result = CalcD3(data, "PBE", damp="zero")
+        assert result.attractive_r6_vdw == pytest.approx(-5.330527244, abs=1e-4)
+
+    def test_ibuprofen_pbe_zero_orca_e8(self):
+        """ORCA PBE/D3(0): E8 = -6.828817849 kcal/mol."""
+        data = read_file(_example("ibuprofen_pbe_orca.out"))
+        result = CalcD3(data, "PBE", damp="zero")
+        assert result.attractive_r8_vdw == pytest.approx(-6.828817849, abs=1e-4)
+
+    def test_ibuprofen_pbe_zero_orca_e6abc(self):
+        """ORCA PBE/D3(0): E6(ABC) = 0.111980199 kcal/mol."""
+        data = read_file(_example("ibuprofen_pbe_orca.out"))
+        result = CalcD3(data, "PBE", damp="zero", abc=True)
+        assert result.repulsive_abc == pytest.approx(0.111980199, abs=1e-3)
+
+    # -- B3LYP / D3(BJ) from ORCA --
+
+    def test_ibuprofen_b3lyp_bj_orca_e6(self):
+        """ORCA B3LYP/D3(BJ): E6 = -19.144204381 kcal/mol."""
+        data = read_file(_example("ibuprofen_b3lyp_orca.out"))
+        result = CalcD3(data, "B3LYP", damp="bj")
+        assert result.attractive_r6_vdw == pytest.approx(-19.144204381, abs=1e-4)
+
+    def test_ibuprofen_b3lyp_bj_orca_e8(self):
+        """ORCA B3LYP/D3(BJ): E8 = -20.754474030 kcal/mol."""
+        data = read_file(_example("ibuprofen_b3lyp_orca.out"))
+        result = CalcD3(data, "B3LYP", damp="bj")
+        assert result.attractive_r8_vdw == pytest.approx(-20.754474030, abs=1e-4)
+
+    # -- B3LYP / D3(BJ) from Q-Chem --
+
+    def test_ibuprofen_b3lyp_bj_qchem(self):
+        """Q-Chem B3LYP/D3(BJ): Etot = -0.0635825846 hartrees."""
+        data = read_file(_example("ibuprofen_b3lyp_qchem.out"))
+        result = CalcD3(data, "B3LYP", damp="bj")
+        total_au = (result.attractive_r6_vdw + result.attractive_r8_vdw) / AUTOKCAL
+        assert total_au == pytest.approx(-0.0635825846, abs=1e-7)
+
+    # -- PBE / D3(0) from Q-Chem --
+
+    def test_ibuprofen_pbe_zero_qchem(self):
+        """Q-Chem PBE/D3(0): Etot = -0.0016601747 hartrees.
+
+        Q-Chem uses non-standard D3(0) parameters for PBE (s6=1.0, s8=0.0,
+        rs6=1.619) rather than Grimme's original (s6=1.0, s8=0.722, rs6=1.217).
+        We pass the Q-Chem parameters explicitly to validate the computation.
+        """
+        data = read_file(_example("ibuprofen_pbe_qchem.out"))
+        result = CalcD3(data, None, damp="zero", s6=1.0, s8=0.0, rs6=1.619)
+        total_au = (result.attractive_r6_vdw + result.attractive_r8_vdw) / AUTOKCAL
+        assert total_au == pytest.approx(-0.0016601747, abs=1e-7)

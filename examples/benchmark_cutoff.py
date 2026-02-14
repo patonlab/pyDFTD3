@@ -1,7 +1,7 @@
 """Benchmark D3(BJ) dispersion energy and timing as a function of cutoff radius.
 
-Runs pyDFTD3 on large molecules (maitotoxin, 3I40 protein) with varying cutoffs
-to show convergence and performance tradeoffs.
+Runs pyDFTD3 on large molecules (maitotoxin, 3I40 protein, 1YA5 protein) with
+varying cutoffs to show convergence and performance tradeoffs.
 
 Usage:
     python examples/benchmark_cutoff.py
@@ -17,11 +17,12 @@ from dftd3.dftd3 import CalcD3, read_file
 
 EXAMPLES_DIR = os.path.dirname(__file__)
 
-CUTOFFS = [6, 9, 12, 15, 20, 30, None]
+CUTOFFS = [10, 15, 25, None]
 
 BENCHMARKS = [
     ("maitotoxin.xyz", "B3LYP", 285),
-    ("3I40.pdb", "B3LYP", None),  # atom count read from file
+    ("3I40.pdb", "B3LYP", None),
+    ("1YA5.pdb", "B3LYP", None),
 ]
 
 

@@ -104,6 +104,9 @@ $ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj
 ```text
 $ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj --im auto
 
+   Caution: fragments detected automatically from covalent connectivity.
+   Only intermolecular dispersion interactions are included.
+
    Species                                        D3(R6)     D3(R8)        ABC  Etot (Hartree)
    -------------------------------------------------------------------------------------------
    examples/formic_acid_dimer.xyz              -0.001521  -0.001449                  -0.002970
@@ -112,33 +115,45 @@ $ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj --im aut
 
 ## Cutoff Radius Benchmark
 
-By default, all pairwise interactions are included (no cutoff). A distance cutoff can be applied with `--cutoff` for large systems to reduce computation time. The tables below show D3(BJ)/B3LYP dispersion energy convergence with respect to cutoff radius.
+By default, all pairwise interactions are included (no cutoff). A distance cutoff can be applied with `--cutoff` for large systems to reduce computation time. The tables below show B3LYP-D3(BJ) dispersion energy convergence with respect to cutoff radius.
 
 **Maitotoxin** (285 atoms):
 
 | Cutoff | Edisp (kcal/mol) | Error (kcal/mol) | Time (s) |
 |-------:|-----------------:|-----------------:|---------:|
-| 6 | -522.718 | +5.337 | 0.9 |
-| 9 | -527.363 | +0.690 | 1.4 |
-| 12 | -527.863 | +0.191 | 2.0 |
-| 15 | -527.978 | +0.076 | 2.7 |
-| 20 | -528.036 | +0.018 | 4.7 |
-| 30 | -528.053 | +0.001 | 8.5 |
-| None | -528.054 | reference | 11.5 |
+| 10 | -527.626 | +0.419 | 0.03 |
+| 15 | -527.969 | +0.076 | 0.02 |
+| 25 | -528.041 | +0.004 | 0.02 |
+| None | -528.045 | reference | 0.02 |
+
+**Maitotoxin with 3-body ATM term** (`--abc`). The ABC term is O(N³) and dominates the computation time, though its energy contribution is negligible. A cutoff is recommended when using `--abc` on large systems.
+
+| Cutoff | Edisp (kcal/mol) | Time without ABC (s) | Time with ABC (s) |
+|-------:|-----------------:|---------------------:|-------------------:|
+| 10 | -527.626 | 0.02 | 1.7 |
+| 15 | -527.969 | 0.02 | 3.0 |
+| 25 | -528.041 | 0.02 | 9.1 |
+| None | -528.045 | 0.02 | 17.9 |
 
 **Human Insulin A chain, PDB: 3I40** (446 atoms):
 
 | Cutoff | Edisp (kcal/mol) | Error (kcal/mol) | Time (s) |
 |-------:|-----------------:|-----------------:|---------:|
-| 6 | -975.557 | +46.468 | 2.9 |
-| 9 | -1014.332 | +7.693 | 7.3 |
-| 12 | -1020.264 | +1.757 | 14.4 |
-| 15 | -1021.600 | +0.421 | 23.7 |
-| 20 | -1021.992 | +0.029 | 38.1 |
-| 30 | -1022.021 | +0.000 | 45.4 |
-| None | -1022.021 | reference | 44.2 |
+| 10 | -1017.432 | +4.595 | 0.04 |
+| 15 | -1021.606 | +0.421 | 0.04 |
+| 25 | -1022.026 | +0.001 | 0.04 |
+| None | -1022.027 | reference | 0.04 |
 
-A cutoff of 15-20 Angstrom recovers >99.99% of the full dispersion energy. The benchmarking script is available at `examples/benchmark_cutoff.py`.
+**Titin Z1Z2–Telethonin, PDB: 1YA5** (3930 atoms):
+
+| Cutoff | Edisp (kcal/mol) | Error (kcal/mol) | Time (s) |
+|-------:|-----------------:|-----------------:|---------:|
+| 10 | -8918.611 | +65.417 | 4.4 |
+| 15 | -8972.563 | +11.465 | 4.7 |
+| 25 | -8983.077 | +0.951 | 4.9 |
+| None | -8984.027 | reference | 4.3 |
+
+A cutoff of 25 Angstrom recovers >99.99% of the full dispersion energy. The benchmarking script is available at `examples/benchmark_cutoff.py`.
 
 ## Testing
 

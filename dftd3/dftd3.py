@@ -107,27 +107,25 @@ MAXC = 5
 
 def _build_r_matrix():
     """Convert diatomic cutoff radii from atomic units to Angstrom."""
-    r = [[0.0] * MAX_ELEM for _ in range(MAX_ELEM)]
+    r = np.zeros((MAX_ELEM, MAX_ELEM))
     k = 0
     for i in range(MAX_ELEM):
         for j in range(i + 1):
-            r[i][j] = r0ab[k] / AUTOANG
-            r[j][i] = r0ab[k] / AUTOANG
+            r[i, j] = r0ab[k] / AUTOANG
+            r[j, i] = r0ab[k] / AUTOANG
             k += 1
     return r
 
 
 def _build_r2r4():
     """Transform PBE0/def2-QZVP multipole coefficients."""
-    transformed = list(r2r4)
-    for i in range(MAX_ELEM):
-        dum = 0.5 * transformed[i] * (i + 1) ** 0.5
-        transformed[i] = dum ** 0.5
-    return transformed
+    r = np.array(r2r4[:MAX_ELEM])
+    indices = np.arange(1, MAX_ELEM + 1, dtype=float)
+    return np.sqrt(0.5 * r * np.sqrt(indices))
 
 
 def _build_c6ab():
-    """Load C6 reference data from the parameter array."""
+    """Load C6 reference data from the parameter array (legacy list format)."""
     nlines = 32385
     c6ab = [[None] * MAX_ELEM for _ in range(MAX_ELEM)]
 
@@ -155,9 +153,54 @@ def _build_c6ab():
     return c6ab
 
 
+def _build_c6ab_numpy():
+    """Load C6 reference data into numpy arrays for vectorized computation.
+
+    Returns (c6_ref, cn1_ref, cn2_ref, mxc) where each ref array has
+    shape (94, 94, 5, 5) and mxc has shape (94,).
+    """
+    nlines = 32385
+    c6_ref = np.zeros((MAX_ELEM, MAX_ELEM, MAXC, MAXC))
+    cn1_ref = np.zeros((MAX_ELEM, MAX_ELEM, MAXC, MAXC))
+    cn2_ref = np.zeros((MAX_ELEM, MAX_ELEM, MAXC, MAXC))
+
+    for nn in range(nlines):
+        kk = nn * 5
+        iadr = 0
+        jadr = 0
+        iat = int(pars[kk + 1]) - 1
+        jat = int(pars[kk + 2]) - 1
+
+        while iat > 99:
+            iadr += 1
+            iat -= 100
+        while jat > 99:
+            jadr += 1
+            jat -= 100
+
+        c6_ref[iat, jat, iadr, jadr] = pars[kk]
+        cn1_ref[iat, jat, iadr, jadr] = pars[kk + 3]
+        cn2_ref[iat, jat, iadr, jadr] = pars[kk + 4]
+
+        c6_ref[jat, iat, jadr, iadr] = pars[kk]
+        cn1_ref[jat, iat, jadr, iadr] = pars[kk + 4]
+        cn2_ref[jat, iat, jadr, iadr] = pars[kk + 3]
+
+    # Max coordination reference count per element
+    mxc = np.zeros(MAX_ELEM, dtype=int)
+    for j in range(MAX_ELEM):
+        for ll in range(MAXC):
+            if c6_ref[j, j, ll, ll] > 0:
+                mxc[j] += 1
+
+    return c6_ref, cn1_ref, cn2_ref, mxc
+
+
 _r = _build_r_matrix()
 _r2r4 = _build_r2r4()
 _c6ab = _build_c6ab()
+_c6_ref, _cn1_ref, _cn2_ref, _mxc_arr = _build_c6ab_numpy()
+_rcov = np.array(rcov[:MAX_ELEM])
 
 
 # ---------------------------------------------------------------------------
@@ -281,28 +324,124 @@ def _getc6(mxc, atomtype, cn, a, b):
     return csum / rsum if rsum > 0 else c6mem
 
 
+def _getc6_all_pairs(elem_idx, cn):
+    """Compute C6 coefficients for all atom pairs (vectorized).
+
+    Groups atoms by element type and uses numpy broadcasting over the
+    (max 5x5) reference coordination-number grid for each element pair.
+
+    Parameters
+    ----------
+    elem_idx : np.ndarray, shape (natom,), dtype int
+        0-based element indices.
+    cn : np.ndarray, shape (natom,)
+        Coordination numbers.
+
+    Returns
+    -------
+    c6_matrix : np.ndarray, shape (natom, natom)
+    """
+    natom = len(elem_idx)
+    c6_matrix = np.empty((natom, natom))
+
+    unique_elems = np.unique(elem_idx)
+    MAX_BLOCK = 20_000_000  # max entries in the 4D broadcast tensor
+
+    for ei in unique_elems:
+        atoms_i = np.where(elem_idx == ei)[0]
+        cn_i = cn[atoms_i]
+        ni = len(atoms_i)
+        mi = int(_mxc_arr[ei])
+
+        for ej in unique_elems:
+            if ej < ei:
+                continue
+
+            atoms_j = np.where(elem_idx == ej)[0]
+            cn_j = cn[atoms_j]
+            nj = len(atoms_j)
+            mj = int(_mxc_arr[ej])
+
+            if mi == 0 or mj == 0:
+                c6_matrix[np.ix_(atoms_i, atoms_j)] = 0.0
+                if ei != ej:
+                    c6_matrix[np.ix_(atoms_j, atoms_i)] = 0.0
+                continue
+
+            c6_block = _c6_ref[ei, ej, :mi, :mj]    # (mi, mj)
+            cn1_block = _cn1_ref[ei, ej, :mi, :mj]   # (mi, mj)
+            cn2_block = _cn2_ref[ei, ej, :mi, :mj]   # (mi, mj)
+            valid = c6_block > 0
+            c6mem = float(np.max(c6_block[valid])) if np.any(valid) else 0.0
+
+            # Chunk over atoms_i to cap memory
+            chunk_ni = max(1, MAX_BLOCK // max(1, nj * mi * mj))
+            results = []
+
+            for a_start in range(0, ni, chunk_ni):
+                a_end = min(a_start + chunk_ni, ni)
+                cn_i_chunk = cn_i[a_start:a_end]
+
+                # Broadcasting: (chunk, 1, mi, mj) and (1, nj, mi, mj)
+                dcn1 = (cn1_block[np.newaxis, np.newaxis, :, :]
+                        - cn_i_chunk[:, np.newaxis, np.newaxis, np.newaxis])
+                dcn2 = (cn2_block[np.newaxis, np.newaxis, :, :]
+                        - cn_j[np.newaxis, :, np.newaxis, np.newaxis])
+
+                r_val = dcn1 ** 2 + dcn2 ** 2  # (chunk, nj, mi, mj)
+                weights = np.exp(K3 * r_val)
+                weights *= valid[np.newaxis, np.newaxis, :, :]
+
+                csum = np.sum(weights * c6_block[np.newaxis, np.newaxis, :, :],
+                              axis=(2, 3))
+                rsum = np.sum(weights, axis=(2, 3))
+
+                results.append(np.where(rsum > 0, csum / rsum, c6mem))
+
+            c6_result = np.vstack(results)  # (ni, nj)
+            c6_matrix[np.ix_(atoms_i, atoms_j)] = c6_result
+            if ei != ej:
+                c6_matrix[np.ix_(atoms_j, atoms_i)] = c6_result.T
+
+    return c6_matrix
+
+
+def _ncoord_vectorized(coords, elem_idx):
+    """Calculate fractional coordination numbers (vectorized).
+
+    Parameters
+    ----------
+    coords : np.ndarray, shape (natom, 3)
+    elem_idx : np.ndarray, shape (natom,), dtype int
+        0-based element indices (atomic number - 1).
+
+    Returns
+    -------
+    cn : np.ndarray, shape (natom,)
+    dist_matrix : np.ndarray, shape (natom, natom)
+        Pairwise distance matrix in Angstrom (reusable by caller).
+    """
+    diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]  # (N, N, 3)
+    dist = np.sqrt(np.sum(diff ** 2, axis=2))  # (N, N)
+
+    rcov_arr = _rcov[elem_idx]  # (natom,)
+    rco = (rcov_arr[:, np.newaxis] + rcov_arr[np.newaxis, :]) * K2  # (N, N)
+
+    safe_dist = np.where(dist < 1e-8, np.inf, dist)
+    rr = rco / safe_dist
+
+    cn_contrib = 1.0 / (1.0 + np.exp(-K1 * (rr - 1.0)))
+    np.fill_diagonal(cn_contrib, 0.0)
+
+    return np.sum(cn_contrib, axis=1), dist
+
+
 def _ncoord(natom, atomtype, xco, yco, zco):
     """Calculate fractional coordination numbers for all atoms."""
-    cn = []
-    for i in range(natom):
-        xn = 0.0
-        zi = _element_index(atomtype[i])
-        for j in range(natom):
-            if j == i:
-                continue
-            dx = xco[j] - xco[i]
-            dy = yco[j] - yco[i]
-            dz = zco[j] - zco[i]
-            dist = math.sqrt(dx * dx + dy * dy + dz * dz)
-            # Guard against divide-by-zero when atoms have identical coordinates
-            if dist < 1e-8:
-                continue
-            zj = _element_index(atomtype[j])
-            rco = (rcov[zi] + rcov[zj]) * K2
-            rr = rco / dist
-            xn += 1.0 / (1.0 + math.exp(-K1 * (rr - 1.0)))
-        cn.append(xn)
-    return cn
+    coords = np.column_stack([xco, yco, zco])
+    elem_idx = np.array([_element_index(s) for s in atomtype])
+    cn, _ = _ncoord_vectorized(coords, elem_idx)
+    return cn.tolist()
 
 
 def _lin(i1, i2):
@@ -395,6 +534,12 @@ def read_file(filepath):
     ORCA 6 outputs), falls back to a lightweight manual ORCA parser.
     """
     try:
+        logging.getLogger("cclib").setLevel(logging.ERROR)
+        try:
+            from openbabel import openbabel
+            openbabel.obErrorLog.SetOutputLevel(0)
+        except ImportError:
+            pass
         data = ccread(filepath)
         if data is not None:
             return data
@@ -443,41 +588,25 @@ class CalcD3:
     """
 
     def __init__(self, file_data, functional, damp="zero",
-                 s6=0.0, rs6=0.0, s8=0.0, a1=0.0, a2=0.0,
+                 s6=None, rs6=None, s8=None, a1=None, a2=None,
                  abc=False, intermolecular=False, pairwise=False,
                  cutoff=None):
 
-        atom_nums = file_data.atomnos.tolist()
-        atomtype = [PERIODIC_TABLE[atno] for atno in atom_nums]
-        cartesians = file_data.atomcoords[-1].tolist()
-        natom = len(atomtype)
+        atom_nums = file_data.atomnos
+        coords = file_data.atomcoords[-1]  # (natom, 3) numpy array
+        natom = len(atom_nums)
+        elem_idx = (atom_nums - 1).astype(int)  # 0-based element indices
+        atomtype = [PERIODIC_TABLE[int(atno)] for atno in atom_nums]
 
-        xco = [at[0] for at in cartesians]
-        yco = [at[1] for at in cartesians]
-        zco = [at[2] for at in cartesians]
+        # For _find_fragments compatibility
+        xco = coords[:, 0].tolist()
+        yco = coords[:, 1].tolist()
+        zco = coords[:, 2].tolist()
 
         self.attractive_r6_vdw = 0.0
         self.attractive_r8_vdw = 0.0
         self.repulsive_abc = 0.0
         self.pairwise_terms = []
-
-        # Determine max coordination reference for each element
-        mxc = [0] * MAX_ELEM
-        for j in range(MAX_ELEM):
-            for k in range(natom):
-                if atomtype[k] == elements[j]:
-                    for ll in range(MAXC):
-                        entry = _c6ab[j][j][ll][ll]
-                        if isinstance(entry, list) and entry[0] > 0:
-                            mxc[j] += 1
-                    break
-
-        # Coordination numbers
-        cn = _ncoord(natom, atomtype, xco, yco, zco)
-
-        # Pre-compute C6jj, C8jj for each atom
-        for j in range(natom):
-            _getc6(mxc, atomtype, cn, j, j)
 
         # rs8 is always 1.0 for the standard D3 scheme
         rs8 = 1.0
@@ -486,7 +615,7 @@ class CalcD3:
         # Resolve damping parameters
         # -------------------------------------------------------------------
         if damp == "zero":
-            if s6 == 0.0 or rs6 == 0.0 or s8 == 0.0:
+            if s6 is None or rs6 is None or s8 is None:
                 if functional is not None:
                     _, prm = _lookup_functional(functional, zero_parms)
                     if prm is not None:
@@ -495,7 +624,7 @@ class CalcD3:
                     logger.warning("No functional information could be read!")
 
         elif damp == "bj":
-            if s6 == 0.0 or s8 == 0.0 or a1 == 0.0 or a2 == 0.0:
+            if s6 is None or s8 is None or a1 is None or a2 is None:
                 if functional is not None:
                     _, prm = _lookup_functional(functional, bj_parms)
                     if prm is not None:
@@ -517,9 +646,6 @@ class CalcD3:
                 else:
                     self.fragments = fragments
                     logger.info("  Auto-detected %d fragments:", len(fragments))
-                    for i, frag in enumerate(fragments):
-                        logger.info("    Fragment %d: atoms %s (%d atoms)",
-                                    i + 1, _format_atom_range(frag), len(frag))
                     mols = [0] * natom
                     for frag_idx, frag in enumerate(fragments):
                         for at in frag:
@@ -546,87 +672,120 @@ class CalcD3:
                     for at in missing:
                         mols[at - 1] = -1  # unique "fragment" so no interactions are skipped
 
-            if mols is not None:
-                logger.info("  Only computing intermolecular dispersion interactions! "
-                            "This is not the total D3-correction")
-
         # -------------------------------------------------------------------
-        # Pairwise loop
+        # Vectorized computation
         # -------------------------------------------------------------------
-        icomp = [0] * 100000
-        cc6ab_arr = [0.0] * 100000
-        r2ab = [0.0] * 100000
-        dmp = [0.0] * 100000
 
-        for j in range(natom):
-            for k in range(j + 1, natom):
-                scalefactor = 1.0
+        # 1. Coordination numbers + distance matrix (reused below)
+        cn, dist_ang = _ncoord_vectorized(coords, elem_idx)
 
-                if mols is not None and mols[j] == mols[k]:
-                    scalefactor = 0.0
-                    logger.info("  --- Ignoring interaction between atoms %d and %d", j + 1, k + 1)
+        # 2. C6 coefficients for all pairs
+        c6_matrix = _getc6_all_pairs(elem_idx, cn)
 
-                xdist = xco[j] - xco[k]
-                ydist = yco[j] - yco[k]
-                zdist = zco[j] - zco[k]
-                totdist = math.sqrt(xdist ** 2 + ydist ** 2 + zdist ** 2)
+        # 3. C8 = 3 * C6 * r2r4[A] * r2r4[B]
+        r2r4_atoms = _r2r4[elem_idx]  # (natom,)
+        c8_matrix = 3.0 * c6_matrix * np.outer(r2r4_atoms, r2r4_atoms)
 
-                if cutoff is not None and totdist > cutoff:
-                    continue
+        # 4. Extract upper-triangle pairs (j < k)
+        j_idx, k_idx = np.triu_indices(natom, k=1)
+        dist_ang_pairs = dist_ang[j_idx, k_idx]
+        c6_pairs = c6_matrix[j_idx, k_idx]
+        c8_pairs = c8_matrix[j_idx, k_idx]
 
-                C6jk = _getc6(mxc, atomtype, cn, j, k)
-                atomA = _element_index(atomtype[j])
-                atomB = _element_index(atomtype[k])
+        # 5. Apply cutoff mask
+        if cutoff is not None:
+            mask = dist_ang_pairs <= cutoff
+            j_idx = j_idx[mask]
+            k_idx = k_idx[mask]
+            dist_ang_pairs = dist_ang_pairs[mask]
+            c6_pairs = c6_pairs[mask]
+            c8_pairs = c8_pairs[mask]
 
-                C8jk = 3.0 * C6jk * _r2r4[atomA] * _r2r4[atomB]
+        # 6. Distance in atomic units
+        dist_au = dist_ang_pairs / AUTOANG
 
-                if damp == "zero":
-                    dist = totdist / AUTOANG
-                    rr = _r[atomA][atomB] / dist
-                    tmp1 = rs6 * rr
-                    damp6 = 1.0 / (1.0 + 6.0 * tmp1 ** ALPHA6)
-                    tmp2 = rs8 * rr
-                    damp8 = 1.0 / (1.0 + 6.0 * tmp2 ** ALPHA8)
+        # 7. Scalefactor for intermolecular mode
+        if mols is not None:
+            mols_arr = np.array(mols)
+            scalefactor = np.where(mols_arr[j_idx] == mols_arr[k_idx], 0.0, 1.0)
+        else:
+            scalefactor = np.ones(len(j_idx))
 
-                    r6_term = -s6 * C6jk * damp6 / dist ** 6 * AUTOKCAL * scalefactor
-                    r8_term = -s8 * C8jk * damp8 / dist ** 8 * AUTOKCAL * scalefactor
+        # 8. Damping and energy terms
+        atomA = elem_idx[j_idx]
+        atomB = elem_idx[k_idx]
 
-                elif damp == "bj":
-                    dist = totdist / AUTOANG
-                    rr = (C8jk / C6jk) ** 0.5
-                    tmp1 = a1 * rr + a2
-                    damp6 = tmp1 ** 6
-                    damp8 = tmp1 ** 8
+        if damp == "zero":
+            rr = _r[atomA, atomB] / dist_au
+            damp6 = 1.0 / (1.0 + 6.0 * (rs6 * rr) ** ALPHA6)
+            damp8 = 1.0 / (1.0 + 6.0 * (rs8 * rr) ** ALPHA8)
 
-                    r6_term = -s6 * C6jk / (dist ** 6 + damp6) * AUTOKCAL * scalefactor
-                    r8_term = -s8 * C8jk / (dist ** 8 + damp8) * AUTOKCAL * scalefactor
+            r6_terms = -s6 * c6_pairs * damp6 / dist_au ** 6 * AUTOKCAL * scalefactor
+            r8_terms = -s8 * c8_pairs * damp8 / dist_au ** 8 * AUTOKCAL * scalefactor
 
-                if pairwise and scalefactor != 0:
-                    self.pairwise_terms.append((j + 1, k + 1, r6_term, r8_term))
+        elif damp == "bj":
+            rr = np.sqrt(c8_pairs / c6_pairs)
+            tmp1 = a1 * rr + a2
+            damp6 = tmp1 ** 6
+            damp8 = tmp1 ** 8
 
-                self.attractive_r6_vdw += r6_term
-                self.attractive_r8_vdw += r8_term
+            r6_terms = -s6 * c6_pairs / (dist_au ** 6 + damp6) * AUTOKCAL * scalefactor
+            r8_terms = -s8 * c8_pairs / (dist_au ** 8 + damp8) * AUTOKCAL * scalefactor
 
-                jk = int(_lin(k, j))
-                icomp[jk] = 1
-                cc6ab_arr[jk] = math.sqrt(C6jk)
-                r2ab[jk] = dist ** 2
-                dmp[jk] = (1.0 / rr) ** (1.0 / 3.0)
+        # 9. Accumulate totals
+        self.attractive_r6_vdw = float(np.sum(r6_terms))
+        self.attractive_r8_vdw = float(np.sum(r8_terms))
+
+        # 10. Pairwise output
+        if pairwise:
+            nonzero = scalefactor != 0
+            for idx in np.where(nonzero)[0]:
+                self.pairwise_terms.append((
+                    int(j_idx[idx]) + 1, int(k_idx[idx]) + 1,
+                    float(r6_terms[idx]), float(r8_terms[idx])
+                ))
 
         # -------------------------------------------------------------------
         # 3-body ATM term
         # -------------------------------------------------------------------
-        e63 = 0.0
-        for iat in range(natom):
-            for jat in range(natom):
-                ij = int(_lin(jat, iat))
-                if icomp[ij] == 1:
+        if abc:
+            npairs = natom * (natom - 1) // 2 + 1
+            icomp = np.zeros(npairs, dtype=bool)
+            cc6ab_arr = np.zeros(npairs)
+            r2ab = np.zeros(npairs)
+            dmp_arr = np.zeros(npairs)
+
+            # Build pair data indexed by _lin(j, k)
+            imax = np.maximum(j_idx, k_idx)
+            imin = np.minimum(j_idx, k_idx)
+            lin_idx = imin + imax * (imax - 1) // 2
+
+            if damp == "zero":
+                rr_3body = _r[atomA, atomB] / dist_au
+                dmp_vals = (1.0 / rr_3body) ** (1.0 / 3.0)
+            elif damp == "bj":
+                rr_3body = np.sqrt(c8_pairs / c6_pairs)
+                dmp_vals = (1.0 / rr_3body) ** (1.0 / 3.0)
+
+            icomp[lin_idx] = True
+            cc6ab_arr[lin_idx] = np.sqrt(c6_pairs)
+            r2ab[lin_idx] = dist_au ** 2
+            dmp_arr[lin_idx] = dmp_vals
+
+            e63 = 0.0
+            for iat in range(natom):
+                for jat in range(natom):
+                    ij = int(_lin(jat, iat))
+                    if not icomp[ij]:
+                        continue
                     for kat in range(jat, natom):
                         ik = int(_lin(kat, iat))
                         jk = int(_lin(kat, jat))
 
-                        if kat > jat > iat and icomp[ik] != 0 and icomp[jk] != 0:
-                            rav = (4.0 / 3.0) / (dmp[ik] * dmp[jk] * dmp[ij])
+                        if kat > jat > iat and icomp[ik] and icomp[jk]:
+                            if mols is not None and mols[iat] == mols[jat] == mols[kat]:
+                                continue
+                            rav = (4.0 / 3.0) / (dmp_arr[ik] * dmp_arr[jk] * dmp_arr[ij])
                             tmp = 1.0 / (1.0 + 6.0 * rav ** ALPHA6)
 
                             c9 = cc6ab_arr[ij] * cc6ab_arr[ik] * cc6ab_arr[jk]
@@ -637,7 +796,7 @@ class CalcD3:
                             ang = 0.375 * t1 * t2 * t3 + 1.0
                             e63 += tmp * c9 * ang / (d2[0] * d2[1] * d2[2]) ** 1.5
 
-        self.repulsive_abc = s6 * e63 * AUTOKCAL
+            self.repulsive_abc = s6 * e63 * AUTOKCAL
 
 
 # Keep old name as an alias for backwards compatibility
@@ -661,15 +820,15 @@ def main():
                         help="Type of D3-damping function (zero, bj)")
     parser.add_argument("--func", dest="functional", default=None,
                         help="Use default D3 parameters for this density functional")
-    parser.add_argument("--s6", dest="s6", default=0.0, type=float,
+    parser.add_argument("--s6", dest="s6", default=None, type=float,
                         help="s6 parameter (used in zero and bj damping)")
-    parser.add_argument("--rs6", dest="rs6", default=0.0, type=float,
+    parser.add_argument("--rs6", dest="rs6", default=None, type=float,
                         help="rs6 parameter used in zero damping")
-    parser.add_argument("--s8", dest="s8", default=0.0, type=float,
+    parser.add_argument("--s8", dest="s8", default=None, type=float,
                         help="s8 parameter used in zero damping")
-    parser.add_argument("--a1", dest="a1", default=0.0, type=float,
+    parser.add_argument("--a1", dest="a1", default=None, type=float,
                         help="a1 parameter used in bj damping")
-    parser.add_argument("--a2", dest="a2", default=0.0, type=float,
+    parser.add_argument("--a2", dest="a2", default=None, type=float,
                         help="a2 parameter used in bj damping")
     parser.add_argument("--kcal", dest="kcal", action="store_true", default=False,
                         help="Print energies in kcal/mol")
@@ -780,9 +939,9 @@ def main():
             dft_functional = unique_functionals.pop()
 
     # Check that we have a functional or manual parameters
-    manual_params = (options.s6 != 0.0 and options.s8 != 0.0 and
-                     (options.damp == "zero" and options.rs6 != 0.0 or
-                      options.damp == "bj" and options.a1 != 0.0 and options.a2 != 0.0))
+    manual_params = (options.s6 is not None and options.s8 is not None and
+                     (options.damp == "zero" and options.rs6 is not None or
+                      options.damp == "bj" and options.a1 is not None and options.a2 is not None))
     if dft_functional is None and not manual_params:
         print("\nError: No functional detected. When using XYZ/PDB/SDF files, you must specify")
         print("a functional with --func <name>, or provide damping parameters manually")
@@ -814,9 +973,9 @@ def main():
         print(f"   D3(0): {citation}")
 
     if options.verbose:
-        manual_params = (options.s6 != 0.0 and options.s8 != 0.0 and
-                         (options.damp == "zero" and options.rs6 != 0.0 or
-                          options.damp == "bj" and options.a1 != 0.0 and options.a2 != 0.0))
+        manual_params = (options.s6 is not None and options.s8 is not None and
+                         (options.damp == "zero" and options.rs6 is not None or
+                          options.damp == "bj" and options.a1 is not None and options.a2 is not None))
         if options.damp == "zero":
             print("\n   D3-dispersion correction with zero-damping")
             if manual_params:
@@ -842,6 +1001,10 @@ def main():
                     print(f"   BJ-damping parameters: s6 = {s6}  s8 = {s8}  a1 = {a1}  a2 = {a2}")
         if options.threebody:
             print("   Including the Axilrod-Teller-Muto repulsive 3-body dispersion term")
+
+    if options.intermolecular == "auto":
+        print("\n   Caution: fragments detected automatically from covalent connectivity.")
+        print("   Only intermolecular dispersion interactions are included.")
 
     print()
     print(header)
@@ -875,6 +1038,11 @@ def main():
                     print(f"   {pw_label:<{name_w}} {pw_r6_u:>{c1_w}.{fmt_dp}f} "
                           f"{pw_r8_u:>{c2_w}.{fmt_dp}f} {abc_blank:>{c3_w}} "
                           f"{pw_total:>{c4_w}.{fmt_dp}f}")
+
+            # Print fragment details in verbose mode
+            if options.verbose and result.fragments is not None:
+                for i, frag in enumerate(result.fragments):
+                    print(f"   Fragment {i + 1}: atoms {_format_atom_range(frag)} ({len(frag)} atoms)")
 
             c6_term = result.attractive_r6_vdw * unit_factor
             c8_term = result.attractive_r8_vdw * unit_factor
