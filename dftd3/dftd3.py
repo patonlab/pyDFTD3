@@ -384,7 +384,8 @@ class CalcD3:
 
     def __init__(self, file_data, functional, damp="zero",
                  s6=0.0, rs6=0.0, s8=0.0, a1=0.0, a2=0.0,
-                 abc=False, intermolecular=False, pairwise=False):
+                 abc=False, intermolecular=False, pairwise=False,
+                 cutoff=None):
 
         atom_nums = file_data.atomnos.tolist()
         atomtype = [PERIODIC_TABLE[atno] for atno in atom_nums]
@@ -449,10 +450,26 @@ class CalcD3:
         if intermolecular:
             logger.info("  Only computing intermolecular dispersion interactions! "
                         "This is not the total D3-correction")
-            mols = [0] * natom
+            mols = [-1] * natom
+            all_atoms = set(range(1, natom + 1))
+            assigned = set()
             for frag_idx, frag_str in enumerate(intermolecular.split(":")):
-                for at in parse_int_set(frag_str):
+                frag_atoms = parse_int_set(frag_str)
+                overlap = assigned & frag_atoms
+                if overlap:
+                    logger.warning("Atom(s) %s assigned to multiple fragments!", sorted(overlap))
+                for at in frag_atoms:
+                    if at < 1 or at > natom:
+                        logger.warning("Atom %d is out of range (1-%d), ignoring", at, natom)
+                        continue
                     mols[int(at) - 1] = frag_idx
+                assigned |= frag_atoms
+            missing = all_atoms - assigned
+            if missing:
+                logger.warning("Atom(s) %s not assigned to any fragment — "
+                               "their interactions will be included", sorted(missing))
+                for at in missing:
+                    mols[at - 1] = -1  # unique "fragment" so no interactions are skipped
 
         # -------------------------------------------------------------------
         # Pairwise loop
@@ -474,6 +491,9 @@ class CalcD3:
                 ydist = yco[j] - yco[k]
                 zdist = zco[j] - zco[k]
                 totdist = math.sqrt(xdist ** 2 + ydist ** 2 + zdist ** 2)
+
+                if cutoff is not None and totdist > cutoff:
+                    continue
 
                 C6jk = _getc6(mxc, atomtype, cn, j, k)
                 atomA = _element_index(atomtype[j])
@@ -578,6 +598,8 @@ def main():
                         help="Turn on repulsive 3-body (ABC) term")
     parser.add_argument("--pw", dest="pairwise", nargs="*", type=int, default=None,
                         help="Print pairwise dispersion terms (optionally specify atom indices, e.g. --pw 1 2)")
+    parser.add_argument("--cutoff", dest="cutoff", type=float, default=None,
+                        help="Distance cutoff in Angstrom (default: no cutoff)")
     parser.add_argument("--im", dest="intermolecular", type=str, default=False,
                         help="Compute only intermolecular dispersion terms")
     parser.add_argument("--cite", dest="cite", action="store_true", default=False,
@@ -678,6 +700,17 @@ def main():
         elif len(unique_functionals) == 1:
             dft_functional = unique_functionals.pop()
 
+    # Check that we have a functional or manual parameters
+    manual_params = (options.s6 != 0.0 and options.s8 != 0.0 and
+                     (options.damp == "zero" and options.rs6 != 0.0 or
+                      options.damp == "bj" and options.a1 != 0.0 and options.a2 != 0.0))
+    if dft_functional is None and not manual_params:
+        print("\nError: No functional detected. When using XYZ/PDB/SDF files, you must specify")
+        print("a functional with --func <name>, or provide damping parameters manually")
+        print(f"(e.g. --s6 --s8 {'--rs6' if options.damp == 'zero' else '--a1 --a2'}).")
+        print(f"\nAvailable {options.damp}-damping functionals: {', '.join(sorted(parm_dict.keys()))}\n")
+        return 1
+
     # Table formatting constants
     name_w = 45  # width of the species column
     c1_w = 11   # D3(R6)
@@ -720,7 +753,8 @@ def main():
             print("\n   D3-dispersion correction with Becke-Johnson damping")
             if manual_params:
                 print("   Manual parameters have been defined")
-                print(f"   BJ-damping parameters: s6 = {options.s6}  s8 = {options.s8}  a1 = {options.a1}  a2 = {options.a2}")
+                print(f"   BJ-damping parameters: s6 = {options.s6}  s8 = {options.s8}  "
+                      f"a1 = {options.a1}  a2 = {options.a2}")
             elif dft_functional is not None:
                 _, prm = _lookup_functional(dft_functional, bj_parms)
                 if prm is not None:
@@ -744,6 +778,7 @@ def main():
                 options.s6, options.rs6, options.s8,
                 options.a1, options.a2,
                 options.threebody, options.intermolecular, do_pairwise,
+                options.cutoff,
             )
 
             unit_factor = 1.0 if options.kcal else 1.0 / AUTOKCAL
@@ -758,7 +793,9 @@ def main():
                     pw_r8_u = pw_r8 * unit_factor
                     pw_total = pw_r6_u + pw_r8_u
                     pw_label = f"{filepath:<38}{at1:>3d} {at2:>2d}"
-                    print(f"   {pw_label:<{name_w}} {pw_r6_u:>{c1_w}.{fmt_dp}f} {pw_r8_u:>{c2_w}.{fmt_dp}f} {abc_blank:>{c3_w}} {pw_total:>{c4_w}.{fmt_dp}f}")
+                    print(f"   {pw_label:<{name_w}} {pw_r6_u:>{c1_w}.{fmt_dp}f} "
+                          f"{pw_r8_u:>{c2_w}.{fmt_dp}f} {abc_blank:>{c3_w}} "
+                          f"{pw_total:>{c4_w}.{fmt_dp}f}")
 
             c6_term = result.attractive_r6_vdw * unit_factor
             c8_term = result.attractive_r8_vdw * unit_factor
@@ -771,7 +808,9 @@ def main():
             else:
                 abc_str = " " * c3_w
 
-            print(f"   {filepath:<{name_w}} {c6_term:>{c1_w}.{fmt_dp}f} {c8_term:>{c2_w}.{fmt_dp}f} {abc_str:>{c3_w}} {total_vdw:>{c4_w}.{fmt_dp}f}")
+            print(f"   {filepath:<{name_w}} {c6_term:>{c1_w}.{fmt_dp}f} "
+                  f"{c8_term:>{c2_w}.{fmt_dp}f} {abc_str:>{c3_w}} "
+                  f"{total_vdw:>{c4_w}.{fmt_dp}f}")
 
         except Exception as e:
             logger.error("Error processing %s: %s", filepath, e)

@@ -2,81 +2,140 @@
 
 [![DOI](https://zenodo.org/badge/54939983.svg)](https://zenodo.org/badge/latestdoi/54939983)
 
-This program will compute the Grimme D3-dispersion energy for a set of atomic Cartesian coordinates. This version implements both versions of short-range damping that appear in the literature (i.e., zero-damping and Becke-Johnson damping) provided the required parameters are specified manually, or the density functional can be automatically recognized from a Gaussian formatted output file - in which case default values will be used. This program was developed to analyze interatomic and intermolecular dispersion energies within the D3-scheme: if two molecules are recognized based on the interatomic connectivity then it is possible to ignore intramolecular terms.
+pyDFTD3 computes Grimme's D3 dispersion energy corrections for molecular geometries. It implements both zero-damping and Becke-Johnson (BJ) damping schemes with optional 3-body Axilrod-Teller-Muto terms.
 
-If a density functional is not recognizable from the input/output file it will be necessary to specify the desired damping parameters. For zero-damping three terms (S6, S8 and RS6) are required. For Becke-Johnson damping four (S6, S8, A1, A2) are required.
+Supported input formats: Gaussian/ORCA output files (`.log`, `.out`), XYZ, PDB, and SDF. For Gaussian and ORCA output files the density functional is detected automatically; for other formats use `--func` to specify the functional.
 
-The 3-body Axilrod-Teller-Muto 3-body dispersion terms can be switched on (they are not computed by default)
+## Installation
 
-This program is no longer actively developed. Usage is now recommended through the [GoodVibes](https://github.com/bobbypaton/GoodVibes) program, where download of these files is necessary for this to function.
+```bash
+pip install -e .              # editable install (creates `pydftd3` CLI)
+pip install -e ".[test]"      # with test dependencies (pytest)
+```
+
+## Usage
+
+```bash
+# As a CLI tool (after install)
+pydftd3 <file> --func <functional> --damp <zero|bj>
+
+# As a module
+python -m dftd3 <file> --func <functional> --damp <zero|bj>
+```
+
+### Options
+
+| Flag | Description |
+|------|-------------|
+| `--damp {zero,bj}` | Damping function (default: zero) |
+| `--func NAME` | Density functional for default parameters |
+| `--abc` | Include repulsive 3-body (ATM) term |
+| `--pw` | Print pairwise dispersion breakdown |
+| `--im "1-5:6-10"` | Compute only intermolecular dispersion |
+| `--cutoff N` | Distance cutoff in Angstrom (default: no cutoff) |
+| `--kcal` | Print energies in kcal/mol |
+| `--cite` | Print citation information |
+| `-v` | Verbose output |
+
+For zero-damping, manual parameters are `--s6`, `--rs6`, `--s8`. For BJ-damping: `--s6`, `--s8`, `--a1`, `--a2`.
 
 ## Examples
 
-Structure files available in the examples directory
+Structure files are available in the `examples/` directory.
 
-1. D3-energy correction with zero-damping for a Gaussian output file. The density functional is parsed from the output and the appropriate damping parameters (s6, rs6, rs8) are applied automatically.
-
- ```python -m dftd3 formic_acid_dimer.log 
- 
-    D3-dispersion correction with zero-damping: detected B3LYP functional - using default zero-damping parameters
-    Zero-damping parameters: s6 = 1.0 rs6 = 1.261 s8 = 1.703
-    3-body term will not be calculated
-
-                                      D3(R6)         D3(R8)         Total (au)
-   formic_acid_dimer.log             -0.00088974    -0.50891629    -0.50980603
-```
-
-2. D3-energy correction with BJ-damping for a Gaussian output file. The density functional is parsed from the output and the appropriate damping parameters (s6, s8, a1, a2) are applied automatically.
-
- ```python -m dftd3 formic_acid_dimer.log -damp bj
-
-    D3-dispersion correction with Becke_Johnson damping: detected B3LYP functional - using default BJ-damping parameters
-    BJ-damping parameters: s6 = 1 s8 = 1.9889 a1 = 0.3981 a2 = 4.4211
-    3-body term will not be calculated
-
-                                      D3(R6)         D3(R8)         Total (au)
-   formic_acid_dimer.log             -0.00455241    -0.00457708    -0.00912948
-```
-
-3. Pairwise breakdown of the D3(BJ) correction by atom pair.
-
- ```python -m dftd3 formic_acid_dimer.log -damp bj -pw
-
-   --- Pairwise interaction between atoms 1 and 2 : Edisp = -0.359915 kcal/mol -0.3599152449643698
-   --- Pairwise interaction between atoms 1 and 3 : Edisp = -0.320618 kcal/mol -0.6805336005703304
-   ...
-   --- Pairwise interaction between atoms 8 and 10 : Edisp = -0.136812 kcal/mol -5.6753050880809095
-   --- Pairwise interaction between atoms 9 and 10 : Edisp = -0.053534 kcal/mol -5.728838870721404
-```
-
-4. D3-energy correction with BJ-damping for a Gaussian input file. The density functional is parsed from the route line. Based on the connectivity, we request only the intermolecular contributions to the D3-energy.
-
- ```python -m dftd3 formic_acid_dimer.com -damp bj -im
-
-   Only computing intermolecular dispersion interactions! This is not the total D3-correction
-
-   --- Ignoring interaction between atoms 1 and 2
-   --- Ignoring interaction between atoms 1 and 3
-   ...
-   --- Ignoring interaction between atoms 8 and 10
-   --- Ignoring interaction between atoms 9 and 10
-
-                                      D3(R6)         D3(R8)         Total (au)
-   formic_acid_dimer.com             -0.00152126    -0.00144858    -0.00296984
-```
-
-5. D3-energy correction with BJ-damping for an XYZ or PDB input file. Either the density functional or the parameters have to be specified in this case.
-
- ```python -m dftd3 formic_acid_dimer.xyz -damp bj -func b3lyp
-
-   D3-dispersion correction with Becke_Johnson damping: detected B3LYP functional - using default BJ-damping parameters
-   BJ-damping parameters: s6 = 1 s8 = 1.9889 a1 = 0.3981 a2 = 4.4211
-   3-body term will not be calculated
-
-                                      D3(R6)         D3(R8)         Total (au)
-   formic_acid_dimer.xyz             -0.00455241    -0.00457708    -0.00912949
+1. **D3 zero-damping** from a Gaussian output file. The functional (B3LYP) is detected automatically.
 
 ```
+$ python -m dftd3 examples/formic_acid_dimer.log
+
+   D3(0): Grimme et al. J. Chem. Phys. 2010, 132, 154104.
+
+   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
+   ------------------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                -0.00091286   -0.00434660                    -0.00525946
+   ------------------------------------------------------------------------------------------------------
+```
+
+2. **D3(BJ) damping** from a Gaussian output file.
+
+```
+$ python -m dftd3 examples/formic_acid_dimer.log --damp bj
+
+   D3(BJ): Grimme et al. J. Comput. Chem. 2011, 32, 1456-1465.
+
+   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
+   ------------------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                -0.00455241   -0.00457708                    -0.00912948
+   ------------------------------------------------------------------------------------------------------
+```
+
+3. **D3(BJ) with 3-body term** enabled via `--abc`.
+
+```
+$ python -m dftd3 examples/formic_acid_dimer.log --damp bj --abc
+
+   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
+   ------------------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                -0.00455241   -0.00457708   -0.00000000      -0.00912948
+   ------------------------------------------------------------------------------------------------------
+```
+
+4. **XYZ input** with explicit functional. For file formats without embedded DFT metadata (XYZ, PDB, SDF), the functional must be specified with `--func`.
+
+```
+$ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj
+
+   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
+   ------------------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.xyz                -0.00455241   -0.00457708                    -0.00912949
+   ------------------------------------------------------------------------------------------------------
+```
+
+## Cutoff Radius Benchmark
+
+By default, all pairwise interactions are included (no cutoff). A distance cutoff can be applied with `--cutoff` for large systems to reduce computation time. The tables below show D3(BJ)/B3LYP dispersion energy convergence with respect to cutoff radius.
+
+**Maitotoxin** (285 atoms):
+
+| Cutoff | Edisp (kcal/mol) | Error (kcal/mol) | Time (s) |
+|-------:|-----------------:|-----------------:|---------:|
+| 6 | -522.718 | +5.337 | 0.9 |
+| 9 | -527.363 | +0.690 | 1.4 |
+| 12 | -527.863 | +0.191 | 2.0 |
+| 15 | -527.978 | +0.076 | 2.7 |
+| 20 | -528.036 | +0.018 | 4.7 |
+| 30 | -528.053 | +0.001 | 8.5 |
+| None | -528.054 | reference | 11.5 |
+
+**3I40 protein** (446 atoms):
+
+| Cutoff | Edisp (kcal/mol) | Error (kcal/mol) | Time (s) |
+|-------:|-----------------:|-----------------:|---------:|
+| 6 | -975.557 | +46.468 | 2.9 |
+| 9 | -1014.332 | +7.693 | 7.3 |
+| 12 | -1020.264 | +1.757 | 14.4 |
+| 15 | -1021.600 | +0.421 | 23.7 |
+| 20 | -1021.992 | +0.029 | 38.1 |
+| 30 | -1022.021 | +0.000 | 45.4 |
+| None | -1022.021 | reference | 44.2 |
+
+A cutoff of 15-20 Angstrom recovers >99.99% of the full dispersion energy. The benchmarking script is available at `examples/benchmark_cutoff.py`.
+
+## Testing
+
+```bash
+pytest                  # run all tests
+pytest tests/ -v        # verbose
+```
+
+Tests verify D3 energies against Grimme's original Fortran DFTD3 V2.1 reference output and against the examples above.
+
+## Citations
+
+If you use pyDFTD3, please cite:
+
+1. Grimme, S.; Antony, J.; Ehrlich, S.; Krieg, H. *J. Chem. Phys.* **2010**, *132*, 154104.
+2. Grimme, S.; Ehrlich, S.; Goerigk, L. *J. Comput. Chem.* **2011**, *32*, 1456-1465.
 
 ---
 License: [MIT](https://opensource.org/licenses/MIT)
