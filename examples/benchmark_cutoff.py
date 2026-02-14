@@ -13,7 +13,7 @@ import time
 
 # Add parent directory to path so we can import dftd3
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from dftd3.dftd3 import AUTOKCAL, CalcD3, read_file
+from dftd3.dftd3 import CalcD3, read_file
 
 EXAMPLES_DIR = os.path.dirname(__file__)
 

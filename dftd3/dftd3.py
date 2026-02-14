@@ -186,6 +186,66 @@ def parse_int_set(input_str=""):
     return selection
 
 
+def _format_atom_range(atoms):
+    """Format a sorted list of integers into a compact range string, e.g. [1,2,3,5] -> '1-3, 5'."""
+    if not atoms:
+        return ""
+    sorted_atoms = sorted(atoms)
+    ranges = []
+    start = end = sorted_atoms[0]
+    for n in sorted_atoms[1:]:
+        if n == end + 1:
+            end = n
+        else:
+            ranges.append(f"{start}-{end}" if end > start else str(start))
+            start = end = n
+    ranges.append(f"{start}-{end}" if end > start else str(start))
+    return ", ".join(ranges)
+
+
+def _find_fragments(atomtype, xco, yco, zco, scale=1.3):
+    """Identify separate molecules from Cartesian coordinates using covalent radii.
+
+    Atoms are considered bonded if their distance is less than
+    ``scale * (rcov[A] + rcov[B])``.  Connected components of the
+    resulting graph are returned as a list of lists of 1-indexed atom
+    numbers.
+    """
+    natom = len(atomtype)
+
+    # Build adjacency list via covalent radii
+    adj = [[] for _ in range(natom)]
+    for i in range(natom):
+        zi = _element_index(atomtype[i])
+        for j in range(i + 1, natom):
+            zj = _element_index(atomtype[j])
+            dist = math.sqrt(
+                (xco[i] - xco[j]) ** 2 + (yco[i] - yco[j]) ** 2 + (zco[i] - zco[j]) ** 2
+            )
+            if dist < scale * (rcov[zi] + rcov[zj]):
+                adj[i].append(j)
+                adj[j].append(i)
+
+    # BFS to find connected components
+    visited = [False] * natom
+    fragments = []
+    for start in range(natom):
+        if visited[start]:
+            continue
+        frag = []
+        queue = [start]
+        visited[start] = True
+        while queue:
+            node = queue.pop(0)
+            frag.append(node + 1)  # 1-indexed
+            for neighbor in adj[node]:
+                if not visited[neighbor]:
+                    visited[neighbor] = True
+                    queue.append(neighbor)
+        fragments.append(frag)
+    return fragments
+
+
 def _element_index(symbol):
     """Return the 0-based index of an element symbol in the elements array."""
     for i, el in enumerate(elements):
@@ -447,29 +507,48 @@ class CalcD3:
         # Intermolecular fragments
         # -------------------------------------------------------------------
         mols = None
+        self.fragments = None
         if intermolecular:
-            logger.info("  Only computing intermolecular dispersion interactions! "
-                        "This is not the total D3-correction")
-            mols = [-1] * natom
-            all_atoms = set(range(1, natom + 1))
-            assigned = set()
-            for frag_idx, frag_str in enumerate(intermolecular.split(":")):
-                frag_atoms = parse_int_set(frag_str)
-                overlap = assigned & frag_atoms
-                if overlap:
-                    logger.warning("Atom(s) %s assigned to multiple fragments!", sorted(overlap))
-                for at in frag_atoms:
-                    if at < 1 or at > natom:
-                        logger.warning("Atom %d is out of range (1-%d), ignoring", at, natom)
-                        continue
-                    mols[int(at) - 1] = frag_idx
-                assigned |= frag_atoms
-            missing = all_atoms - assigned
-            if missing:
-                logger.warning("Atom(s) %s not assigned to any fragment — "
-                               "their interactions will be included", sorted(missing))
-                for at in missing:
-                    mols[at - 1] = -1  # unique "fragment" so no interactions are skipped
+            if intermolecular == "auto":
+                fragments = _find_fragments(atomtype, xco, yco, zco)
+                if len(fragments) < 2:
+                    logger.warning("Only 1 molecule detected — cannot compute intermolecular dispersion")
+                    intermolecular = False
+                else:
+                    self.fragments = fragments
+                    logger.info("  Auto-detected %d fragments:", len(fragments))
+                    for i, frag in enumerate(fragments):
+                        logger.info("    Fragment %d: atoms %s (%d atoms)",
+                                    i + 1, _format_atom_range(frag), len(frag))
+                    mols = [0] * natom
+                    for frag_idx, frag in enumerate(fragments):
+                        for at in frag:
+                            mols[at - 1] = frag_idx
+            else:
+                mols = [-1] * natom
+                all_atoms = set(range(1, natom + 1))
+                assigned = set()
+                for frag_idx, frag_str in enumerate(intermolecular.split(":")):
+                    frag_atoms = parse_int_set(frag_str)
+                    overlap = assigned & frag_atoms
+                    if overlap:
+                        logger.warning("Atom(s) %s assigned to multiple fragments!", sorted(overlap))
+                    for at in frag_atoms:
+                        if at < 1 or at > natom:
+                            logger.warning("Atom %d is out of range (1-%d), ignoring", at, natom)
+                            continue
+                        mols[int(at) - 1] = frag_idx
+                    assigned |= frag_atoms
+                missing = all_atoms - assigned
+                if missing:
+                    logger.warning("Atom(s) %s not assigned to any fragment — "
+                                   "their interactions will be included", sorted(missing))
+                    for at in missing:
+                        mols[at - 1] = -1  # unique "fragment" so no interactions are skipped
+
+            if mols is not None:
+                logger.info("  Only computing intermolecular dispersion interactions! "
+                            "This is not the total D3-correction")
 
         # -------------------------------------------------------------------
         # Pairwise loop
@@ -712,7 +791,7 @@ def main():
         return 1
 
     # Table formatting constants
-    name_w = 45  # width of the species column
+    name_w = 42  # width of the species column
     c1_w = 10   # D3(R6)
     c2_w = 10   # D3(R8)
     c3_w = 10   # ABC
@@ -721,7 +800,7 @@ def main():
     total_label = "Etot (kcal/mol)" if options.kcal else "Etot (Hartree)"
     do_pairwise = options.pairwise is not None
     if do_pairwise:
-        species_label = f"{'Species':<38}{'i':>3} {'j':>2}"
+        species_label = f"{'Species':<35}{'i':>3} {'j':>2}"
     else:
         species_label = "Species"
     header = f"   {species_label:<{name_w}} {'D3(R6)':>{c1_w}} {'D3(R8)':>{c2_w}} {'ABC':>{c3_w}} {total_label:>{c4_w}}"

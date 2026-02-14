@@ -32,6 +32,7 @@ python -m dftd3 <file> --func <functional> --damp <zero|bj>
 | `--abc` | Include repulsive 3-body (ATM) term |
 | `--pw` | Print pairwise dispersion breakdown |
 | `--im "1-5:6-10"` | Compute only intermolecular dispersion |
+| `--im auto` | Auto-detect fragments from covalent connectivity |
 | `--cutoff N` | Distance cutoff in Angstrom (default: no cutoff) |
 | `--kcal` | Print energies in kcal/mol |
 | `--cite` | Print citation information |
@@ -45,57 +46,68 @@ Structure files are available in the `examples/` directory.
 
 1. **D3 zero-damping** from a Gaussian output file. The functional (B3LYP) is detected automatically.
 
-```
+```text
 $ python -m dftd3 examples/formic_acid_dimer.log
 
-   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
-   ----------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                 -0.000913  -0.004347                  -0.005259
-   ----------------------------------------------------------------------------------------------
+   Species                                        D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   -------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log              -0.000913  -0.004347                  -0.005259
+   -------------------------------------------------------------------------------------------
 ```
 
 2. **D3(BJ) damping** from a Gaussian output file.
 
-```
+```text
 $ python -m dftd3 examples/formic_acid_dimer.log --damp bj
 
-   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
-   ----------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                 -0.004552  -0.004577                  -0.009129
-   ----------------------------------------------------------------------------------------------
+   Species                                        D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   -------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log              -0.004552  -0.004577                  -0.009129
+   -------------------------------------------------------------------------------------------
 ```
 
 3. **D3(BJ) with 3-body term** enabled via `--abc`.
 
-```
+```text
 $ python -m dftd3 examples/formic_acid_dimer.log --damp bj --abc
 
-   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
-   ----------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                 -0.004552  -0.004577  -0.000000       -0.009129
-   ----------------------------------------------------------------------------------------------
+   Species                                        D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   -------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log              -0.004552  -0.004577  -0.000000       -0.009129
+   -------------------------------------------------------------------------------------------
 ```
 
 4. **Output in kcal/mol** using `--kcal`.
 
-```
+```text
 $ python -m dftd3 examples/formic_acid_dimer.log --damp bj --kcal
 
-   Species                                           D3(R6)     D3(R8)        ABC Etot (kcal/mol)
-   ----------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                     -2.86      -2.87                      -5.73
-   ----------------------------------------------------------------------------------------------
+   Species                                        D3(R6)     D3(R8)        ABC Etot (kcal/mol)
+   -------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                  -2.86      -2.87                      -5.73
+   -------------------------------------------------------------------------------------------
 ```
 
 5. **XYZ input** with explicit functional. For file formats without embedded DFT metadata (XYZ, PDB, SDF), the functional must be specified with `--func`.
 
-```
+```text
 $ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj
 
-   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
-   ----------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.xyz                 -0.004552  -0.004577                  -0.009129
-   ----------------------------------------------------------------------------------------------
+   Species                                        D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   -------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.xyz              -0.004552  -0.004577                  -0.009129
+   -------------------------------------------------------------------------------------------
+```
+
+6. **Automatic intermolecular mode** using `--im auto`. Fragments are detected automatically from covalent radii-based connectivity. Use `-v` to see fragment details.
+
+```text
+$ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj --im auto
+
+   Species                                        D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   -------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.xyz              -0.001521  -0.001449                  -0.002970
+   -------------------------------------------------------------------------------------------
 ```
 
 ## Cutoff Radius Benchmark

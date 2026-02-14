@@ -19,6 +19,7 @@ from dftd3.dftd3 import (
     CalcD3,
     _c6ab,
     _element_index,
+    _find_fragments,
     _getc6,
     _ncoord,
     _r,
@@ -379,3 +380,53 @@ class TestThreeBody:
         data = ccread(_example("formic_acid_dimer.log"))
         result = CalcD3(data, "B3LYP", damp="bj", abc=True)
         assert result.repulsive_abc != 0.0
+
+
+# ---------------------------------------------------------------------------
+# Fragment detection and --im auto
+# ---------------------------------------------------------------------------
+
+class TestFragmentDetection:
+    def test_formic_acid_dimer_two_fragments(self):
+        """Formic acid dimer should be detected as two separate molecules."""
+        data = ccread(_example("formic_acid_dimer.xyz"))
+        atomtype = [PERIODIC_TABLE[n] for n in data.atomnos]
+        coords = data.atomcoords[-1].tolist()
+        xco = [c[0] for c in coords]
+        yco = [c[1] for c in coords]
+        zco = [c[2] for c in coords]
+        fragments = _find_fragments(atomtype, xco, yco, zco)
+        assert len(fragments) == 2
+        assert sorted(fragments[0]) == [1, 2, 3, 4, 5]
+        assert sorted(fragments[1]) == [6, 7, 8, 9, 10]
+
+    def test_im_auto_gives_intermolecular_only(self):
+        """--im auto should give the same result as manual fragment specification."""
+        data = ccread(_example("formic_acid_dimer.xyz"))
+        result_auto = CalcD3(data, "B3LYP", damp="bj", intermolecular="auto")
+        result_manual = CalcD3(data, "B3LYP", damp="bj", intermolecular="1-5:6-10")
+        assert result_auto.attractive_r6_vdw == pytest.approx(
+            result_manual.attractive_r6_vdw, abs=1e-10)
+        assert result_auto.attractive_r8_vdw == pytest.approx(
+            result_manual.attractive_r8_vdw, abs=1e-10)
+
+    def test_im_auto_less_than_total(self):
+        """Intermolecular dispersion should be less than total dispersion."""
+        data = ccread(_example("formic_acid_dimer.xyz"))
+        result_total = CalcD3(data, "B3LYP", damp="bj")
+        result_im = CalcD3(data, "B3LYP", damp="bj", intermolecular="auto")
+        total = abs(result_total.attractive_r6_vdw + result_total.attractive_r8_vdw)
+        im = abs(result_im.attractive_r6_vdw + result_im.attractive_r8_vdw)
+        assert im < total
+
+    def test_im_auto_single_molecule_falls_back(self):
+        """Single molecule should fall back to total dispersion (no fragments to split)."""
+        data = ccread(_example("ibuprofen_nod3.log"))
+        result_im = CalcD3(data, "B3LYP", damp="bj", intermolecular="auto")
+        result_total = CalcD3(data, "B3LYP", damp="bj")
+        # When only 1 fragment is found, auto falls back to total dispersion
+        assert result_im.fragments is None
+        assert result_im.attractive_r6_vdw == pytest.approx(
+            result_total.attractive_r6_vdw, abs=1e-10)
+        assert result_im.attractive_r8_vdw == pytest.approx(
+            result_total.attractive_r8_vdw, abs=1e-10)
