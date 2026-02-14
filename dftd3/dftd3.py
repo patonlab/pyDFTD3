@@ -20,26 +20,49 @@ import logging
 import math
 import sys
 from argparse import ArgumentParser
+from datetime import datetime
 
+import numpy as np
 from cclib.io import ccread
 
-from .pars import (
-    bj_parms,
-    elements,
-    pars,
-    r0ab,
-    r2r4,
-    rcov,
-    resolve_functional,
-    zero_parms,
-)
+try:
+    from .pars import (
+        bj_parms,
+        elements,
+        pars,
+        r0ab,
+        r2r4,
+        rcov,
+        resolve_functional,
+        zero_parms,
+    )
+except ImportError:
+    from pars import (
+        bj_parms,
+        elements,
+        pars,
+        r0ab,
+        r2r4,
+        rcov,
+        resolve_functional,
+        zero_parms,
+    )
 
 logger = logging.getLogger(__name__)
 
-CITATIONS = (
-    "D3 zero-damping: S. Grimme et al., J. Chem. Phys. 132, 154104 (2010)",
-    "D3 BJ-damping:   S. Grimme et al., J. Comput. Chem. 32, 1456 (2011)",
+CITATION_ZERO = (
+    "Grimme, S.; Antony, J.; Ehrlich, S.; Krieg, H. "
+    "A Consistent and Accurate Ab Initio Parametrization of Density Functional "
+    "Dispersion Correction (DFT-D) for the 94 Elements H-Pu. "
+    "J. Chem. Phys. 2010, 132, 154104."
 )
+CITATION_ZERO_SHORT = "Grimme, S.; Antony, J.; Ehrlich, S.; Krieg, H. J. Chem. Phys. 2010, 132, 154104."
+CITATION_BJ = (
+    "Grimme, S.; Ehrlich, S.; Goerigk, L. "
+    "Effect of the Damping Function in Dispersion Corrected Density Functional Theory. "
+    "J. Comput. Chem. 2011, 32, 1456\u20131465."
+)
+CITATION_BJ_SHORT = "Grimme, S.; Ehrlich, S.; Goerigk, L. J. Comput. Chem. 2011, 32, 1456\u20131465."
 
 SUPPORTED_EXTENSIONS = {"out", "log", "sdf", "xyz", "pdb"}
 
@@ -245,6 +268,87 @@ def _lookup_functional(name, parm_dict):
 
 
 # ---------------------------------------------------------------------------
+# ORCA output parser (fallback when cclib fails)
+# ---------------------------------------------------------------------------
+
+class _OrcaData:
+    """Lightweight container mimicking cclib parsed data for ORCA outputs."""
+
+    def __init__(self, atomnos, atomcoords, functional=None):
+        self.atomnos = np.array(atomnos, dtype=int)
+        self.atomcoords = np.array([atomcoords])
+        self.metadata = {"functional": functional} if functional else {}
+
+
+def _parse_orca(filepath):
+    """Parse an ORCA output file for coordinates and functional name.
+
+    Extracts the last 'CARTESIAN COORDINATES (ANGSTROEM)' block and the
+    functional name from the 'The <name> functional is recognized' line.
+    Returns an _OrcaData object compatible with CalcD3, or None on failure.
+    """
+    with open(filepath) as f:
+        lines = f.readlines()
+
+    # --- Parse coordinates (use last block in case of geometry optimization) ---
+    coord_start = None
+    for i, line in enumerate(lines):
+        if "CARTESIAN COORDINATES (ANGSTROEM)" in line:
+            coord_start = i + 2  # skip header + dashes
+
+    if coord_start is None:
+        return None
+
+    atomnos = []
+    coords = []
+    for line in lines[coord_start:]:
+        parts = line.split()
+        if len(parts) != 4:
+            break
+        sym = parts[0]
+        if sym not in PERIODIC_TABLE:
+            break
+        atomnos.append(PERIODIC_TABLE.index(sym))
+        coords.append([float(parts[1]), float(parts[2]), float(parts[3])])
+
+    if not atomnos:
+        return None
+
+    # --- Parse functional name ---
+    functional = None
+    for line in lines:
+        if "functional is recognized" in line:
+            # "The B3LYP functional is recognized"
+            parts = line.split()
+            idx = parts.index("functional")
+            if idx > 0:
+                functional = parts[idx - 1]
+            break
+
+    return _OrcaData(atomnos, coords, functional)
+
+
+def read_file(filepath):
+    """Parse a molecular structure file, with ORCA fallback.
+
+    Tries cclib first.  If cclib fails or returns None (common with newer
+    ORCA 6 outputs), falls back to a lightweight manual ORCA parser.
+    """
+    try:
+        data = ccread(filepath)
+        if data is not None:
+            return data
+    except Exception:
+        pass
+
+    # Fallback: try manual ORCA parser
+    data = _parse_orca(filepath)
+    if data is not None:
+        logger.info("Parsed %s using ORCA fallback parser", filepath)
+    return data
+
+
+# ---------------------------------------------------------------------------
 # Main D3 calculator
 # ---------------------------------------------------------------------------
 
@@ -294,6 +398,7 @@ class CalcD3:
         self.attractive_r6_vdw = 0.0
         self.attractive_r8_vdw = 0.0
         self.repulsive_abc = 0.0
+        self.pairwise_terms = []
 
         # Determine max coordination reference for each element
         mxc = [0] * MAX_ELEM
@@ -320,41 +425,22 @@ class CalcD3:
         # Resolve damping parameters
         # -------------------------------------------------------------------
         if damp == "zero":
-            logger.info("D3-dispersion correction with zero-damping:")
             if s6 == 0.0 or rs6 == 0.0 or s8 == 0.0:
                 if functional is not None:
-                    name, prm = _lookup_functional(functional, zero_parms)
+                    _, prm = _lookup_functional(functional, zero_parms)
                     if prm is not None:
                         s6, rs6, s8 = prm
-                        logger.info("  detected %s functional - using default zero-damping parameters", name)
-                    else:
-                        logger.warning("  Could not find zero-damping parameters for functional '%s'", functional)
                 else:
-                    logger.warning("  No functional information could be read!")
-            else:
-                logger.info("  manual parameters have been defined")
-            logger.info("  Zero-damping parameters: s6 = %s  rs6 = %s  s8 = %s", s6, rs6, s8)
+                    logger.warning("No functional information could be read!")
 
         elif damp == "bj":
-            logger.info("D3-dispersion correction with Becke-Johnson damping:")
             if s6 == 0.0 or s8 == 0.0 or a1 == 0.0 or a2 == 0.0:
                 if functional is not None:
-                    name, prm = _lookup_functional(functional, bj_parms)
+                    _, prm = _lookup_functional(functional, bj_parms)
                     if prm is not None:
                         s6, a1, s8, a2 = prm
-                        logger.info("  detected %s functional - using default BJ-damping parameters", name)
-                    else:
-                        logger.warning("  Could not find BJ-damping parameters for functional '%s'", functional)
                 else:
-                    logger.warning("  No functional information could be read!")
-            else:
-                logger.info("  manual parameters have been defined")
-            logger.info("  BJ-damping parameters: s6 = %s  s8 = %s  a1 = %s  a2 = %s", s6, s8, a1, a2)
-
-        if not abc:
-            logger.info("  3-body term will not be calculated")
-        else:
-            logger.info("  Including the Axilrod-Teller-Muto 3-body dispersion term")
+                    logger.warning("No functional information could be read!")
 
         # -------------------------------------------------------------------
         # Intermolecular fragments
@@ -417,8 +503,7 @@ class CalcD3:
                     r8_term = -s8 * C8jk / (dist ** 8 + damp8) * AUTOKCAL * scalefactor
 
                 if pairwise and scalefactor != 0:
-                    logger.info("  --- Pairwise interaction between atoms %d and %d : "
-                                "Edisp = %.6f kcal/mol", j + 1, k + 1, r6_term + r8_term)
+                    self.pairwise_terms.append((j + 1, k + 1, r6_term, r8_term))
 
                 self.attractive_r6_vdw += r6_term
                 self.attractive_r8_vdw += r8_term
@@ -467,7 +552,7 @@ calcD3 = CalcD3
 def main():
     parser = ArgumentParser(
         description="Compute Grimme's DFT-D3 dispersion correction.",
-        epilog="\n".join(CITATIONS),
+        epilog=f"{CITATION_ZERO}\n{CITATION_BJ}",
     )
     parser.add_argument("files", nargs="*", help="Input structure file(s)")
     parser.add_argument("-v", dest="verbose", action="store_true", default=False,
@@ -489,10 +574,10 @@ def main():
                         help="a2 parameter used in bj damping")
     parser.add_argument("--kcal", dest="kcal", action="store_true", default=False,
                         help="Print energies in kcal/mol")
-    parser.add_argument("--3body", dest="threebody", action="store_true", default=False,
-                        help="Turn on repulsive 3-body term")
-    parser.add_argument("--pw", dest="pairwise", action="store_true", default=False,
-                        help="Print dispersion terms between all interatomic pairs")
+    parser.add_argument("--abc", dest="threebody", action="store_true", default=False,
+                        help="Turn on repulsive 3-body (ABC) term")
+    parser.add_argument("--pw", dest="pairwise", nargs="*", type=int, default=None,
+                        help="Print pairwise dispersion terms (optionally specify atom indices, e.g. --pw 1 2)")
     parser.add_argument("--im", dest="intermolecular", type=str, default=False,
                         help="Compute only intermolecular dispersion terms")
     parser.add_argument("--cite", dest="cite", action="store_true", default=False,
@@ -506,10 +591,20 @@ def main():
         level=logging.INFO if options.verbose else logging.WARNING,
     )
 
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(rf"""    ____       __
+   /\  _`\   /'__`\
+   \ \ \/\ \/\_\L\ \
+    \ \ \ \ \/_/_\_<_
+     \ \ \_\ \/\ \L\ \
+      \ \____/\ \____/
+       \/___/  \/___/   ¯\_(ツ)_/¯  {now}
+""")
+
     if options.cite:
-        print("\nPlease cite the following when using DFT-D3 corrections:\n")
-        for cite in CITATIONS:
-            print(f"  {cite}")
+        print("Please cite the following when using DFT-D3 corrections:\n")
+        print(f"  [1] {CITATION_ZERO}")
+        print(f"  [2] {CITATION_BJ}")
         print()
         return 0
 
@@ -528,11 +623,24 @@ def main():
         print("\nNo valid files found!\n")
         return 1
 
+    # Parse all input files
+    parm_dict = zero_parms if options.damp == "zero" else bj_parms
+    parsed_files = []
+    for filepath in files:
+        data = read_file(filepath)
+        if data is None:
+            logger.warning("Could not parse file: %s", filepath)
+            continue
+        parsed_files.append((filepath, data))
+
+    if not parsed_files:
+        print("\nNo valid files could be parsed!\n")
+        return 1
+
     # Resolve the functional name through aliases
     dft_functional = None
     if options.functional is not None:
         canonical = resolve_functional(options.functional)
-        parm_dict = zero_parms if options.damp == "zero" else bj_parms
         if canonical in parm_dict:
             dft_functional = canonical
         else:
@@ -545,74 +653,133 @@ def main():
                       f"to stored {options.damp}-damping parameters!")
                 print(f"Available functionals: {', '.join(sorted(parm_dict.keys()))}\n")
                 return 1
+    else:
+        # Auto-detect functional from parsed files and check consistency
+        detected = {}
+        for filepath, data in parsed_files:
+            try:
+                parsed_func = data.metadata.get("functional")
+                if parsed_func:
+                    canonical = resolve_functional(parsed_func)
+                    if canonical in parm_dict:
+                        detected[filepath] = canonical
+                    elif parsed_func.upper() in parm_dict:
+                        detected[filepath] = parsed_func.upper()
+            except (AttributeError, KeyError):
+                pass
+
+        unique_functionals = set(detected.values())
+        if len(unique_functionals) > 1:
+            print("\nInconsistent functionals detected across input files:")
+            for fp, func in detected.items():
+                print(f"  {fp}: {func}")
+            print("\nPlease use --func to specify a single functional.\n")
+            return 1
+        elif len(unique_functionals) == 1:
+            dft_functional = unique_functionals.pop()
+
+    # Table formatting constants
+    name_w = 45  # width of the species column
+    c1_w = 11   # D3(R6)
+    c2_w = 13   # D3(R8)
+    c3_w = 13   # ABC
+    c4_w = 16   # Total
+    fmt_dp = 2 if options.kcal else 8  # decimal places
+    total_label = "Etot (kcal/mol)" if options.kcal else "Etot (Hartree)"
+    do_pairwise = options.pairwise is not None
+    if do_pairwise:
+        species_label = f"{'Species':<38}{'i':>3} {'j':>2}"
+    else:
+        species_label = "Species"
+    header = f"   {species_label:<{name_w}} {'D3(R6)':>{c1_w}} {'D3(R8)':>{c2_w}} {'ABC':>{c3_w}} {total_label:>{c4_w}}"
+    rule = "   " + "-" * (name_w + c1_w + c2_w + c3_w + c4_w + 4)
+
+    if options.damp == "bj":
+        citation = CITATION_BJ_SHORT
+        print(f"   D3(BJ): {citation}")
+    else:
+        citation = CITATION_ZERO_SHORT
+        print(f"   D3(0): {citation}")
 
     if options.verbose:
-        print()
-        for cite in CITATIONS:
-            print(f"   {cite}")
-        print()
+        manual_params = (options.s6 != 0.0 and options.s8 != 0.0 and
+                         (options.damp == "zero" and options.rs6 != 0.0 or
+                          options.damp == "bj" and options.a1 != 0.0 and options.a2 != 0.0))
+        if options.damp == "zero":
+            print("\n   D3-dispersion correction with zero-damping")
+            if manual_params:
+                print("   Manual parameters have been defined")
+                print(f"   Zero-damping parameters: s6 = {options.s6}  rs6 = {options.rs6}  s8 = {options.s8}")
+            elif dft_functional is not None:
+                _, prm = _lookup_functional(dft_functional, zero_parms)
+                if prm is not None:
+                    s6, rs6, s8 = prm
+                    print(f"   Detected {dft_functional} functional - using default zero-damping parameters")
+                    print(f"   Zero-damping parameters: s6 = {s6}  rs6 = {rs6}  s8 = {s8}")
+        elif options.damp == "bj":
+            print("\n   D3-dispersion correction with Becke-Johnson damping")
+            if manual_params:
+                print("   Manual parameters have been defined")
+                print(f"   BJ-damping parameters: s6 = {options.s6}  s8 = {options.s8}  a1 = {options.a1}  a2 = {options.a2}")
+            elif dft_functional is not None:
+                _, prm = _lookup_functional(dft_functional, bj_parms)
+                if prm is not None:
+                    s6, a1, s8, a2 = prm
+                    print(f"   Detected {dft_functional} functional - using default BJ-damping parameters")
+                    print(f"   BJ-damping parameters: s6 = {s6}  s8 = {s8}  a1 = {a1}  a2 = {a2}")
+        if options.threebody:
+            print("   Including the Axilrod-Teller-Muto repulsive 3-body dispersion term")
+
+    print()
+    print(header)
+    print(rule)
 
     exit_code = 0
-    for filepath in files:
+    for filepath, data in parsed_files:
         try:
-            data = ccread(filepath)
-            if data is None:
-                logger.warning("Could not parse file: %s", filepath)
-                continue
-
-            # Auto-detect functional from parsed file if not specified
-            file_functional = dft_functional
-            if file_functional is None:
-                try:
-                    parsed_func = data.metadata.get("functional")
-                    if parsed_func:
-                        canonical = resolve_functional(parsed_func)
-                        parm_dict = zero_parms if options.damp == "zero" else bj_parms
-                        if canonical in parm_dict:
-                            file_functional = canonical
-                        elif parsed_func.upper() in parm_dict:
-                            file_functional = parsed_func.upper()
-                except (AttributeError, KeyError):
-                    pass
+            pw_atoms = set(options.pairwise) if do_pairwise and options.pairwise else None
 
             result = CalcD3(
-                data, file_functional, options.damp,
+                data, dft_functional, options.damp,
                 options.s6, options.rs6, options.s8,
                 options.a1, options.a2,
-                options.threebody, options.intermolecular, options.pairwise,
+                options.threebody, options.intermolecular, do_pairwise,
             )
 
-            if options.kcal:
-                c6_term = result.attractive_r6_vdw
-                c8_term = result.attractive_r8_vdw
-                threebody_term = result.repulsive_abc
-            else:
-                c6_term = result.attractive_r6_vdw / AUTOKCAL
-                c8_term = result.attractive_r8_vdw / AUTOKCAL
-                threebody_term = result.repulsive_abc / AUTOKCAL
+            unit_factor = 1.0 if options.kcal else 1.0 / AUTOKCAL
 
+            # Print pairwise breakdown (same column layout as summary)
+            if do_pairwise and result.pairwise_terms:
+                abc_blank = " " * c3_w
+                for at1, at2, pw_r6, pw_r8 in result.pairwise_terms:
+                    if pw_atoms and not (at1 in pw_atoms and at2 in pw_atoms):
+                        continue
+                    pw_r6_u = pw_r6 * unit_factor
+                    pw_r8_u = pw_r8 * unit_factor
+                    pw_total = pw_r6_u + pw_r8_u
+                    pw_label = f"{filepath:<38}{at1:>3d} {at2:>2d}"
+                    print(f"   {pw_label:<{name_w}} {pw_r6_u:>{c1_w}.{fmt_dp}f} {pw_r8_u:>{c2_w}.{fmt_dp}f} {abc_blank:>{c3_w}} {pw_total:>{c4_w}.{fmt_dp}f}")
+
+            c6_term = result.attractive_r6_vdw * unit_factor
+            c8_term = result.attractive_r8_vdw * unit_factor
+            threebody_term = result.repulsive_abc * unit_factor
+
+            total_vdw = c6_term + c8_term
             if options.threebody:
-                total_vdw = c6_term + c8_term + threebody_term
-                if options.verbose:
-                    print("   {:<30} {:>13} {:>13} {:>13} {:>13}".format(
-                        "Species", "D3(R6)", "D3(R8)", "3-body", "Total"))
-                print("   {:<30} {:13.8f} {:13.8f} {:13.8f} {:13.8f}".format(
-                    filepath, c6_term, c8_term, threebody_term, total_vdw))
+                total_vdw += threebody_term
+                abc_str = f"{threebody_term:{c3_w}.{fmt_dp}f}"
             else:
-                total_vdw = c6_term + c8_term
-                if options.verbose:
-                    print("   {:<30} {:>13} {:>13} {:>13}".format(
-                        "Species", "D3(R6)", "D3(R8)", "Total"))
-                print("   {:<30} {:13.8f} {:13.8f} {:13.8f}".format(
-                    filepath, c6_term, c8_term, total_vdw))
+                abc_str = " " * c3_w
+
+            print(f"   {filepath:<{name_w}} {c6_term:>{c1_w}.{fmt_dp}f} {c8_term:>{c2_w}.{fmt_dp}f} {abc_str:>{c3_w}} {total_vdw:>{c4_w}.{fmt_dp}f}")
 
         except Exception as e:
             logger.error("Error processing %s: %s", filepath, e)
             exit_code = 1
 
+    print(rule)
     print()
     return exit_code
-
 
 if __name__ == "__main__":
     main()
