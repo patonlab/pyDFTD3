@@ -8,7 +8,6 @@ Parameters sourced from:
 - ORCA 6.0 manual, Tables 3.17, 3.18, and 3.19
 """
 
-import math
 
 # Aliases map alternative functional names (as used by different programs)
 # to the canonical name used as a key in zero_parms / bj_parms.

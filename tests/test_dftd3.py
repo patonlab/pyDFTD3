@@ -6,16 +6,17 @@ README examples provide additional reference values for formic acid dimer.
 """
 
 import os
+
 import pytest
 from cclib.io import ccread
 
 from dftd3.dftd3 import (
-    CalcD3,
-    AUTOKCAL,
     AUTOANG,
+    AUTOKCAL,
     MAX_ELEM,
     MAXC,
     PERIODIC_TABLE,
+    CalcD3,
     _c6ab,
     _element_index,
     _getc6,
@@ -23,7 +24,7 @@ from dftd3.dftd3 import (
     _r,
     _r2r4,
 )
-from dftd3.pars import elements, resolve_functional, zero_parms, bj_parms, d4_parms
+from dftd3.pars import bj_parms, d4_parms, elements, resolve_functional, zero_parms
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
@@ -283,7 +284,7 @@ class TestGrimmeReference:
 
 
 # ---------------------------------------------------------------------------
-# D3(BJ) – formic acid dimer (README reference values)
+# D3(BJ) - formic acid dimer (README reference values)
 # ---------------------------------------------------------------------------
 
 class TestD3BJ:
@@ -333,7 +334,7 @@ class TestD3BJ:
 
 
 # ---------------------------------------------------------------------------
-# D3 zero-damping – formic acid dimer
+# D3 zero-damping - formic acid dimer
 # ---------------------------------------------------------------------------
 
 class TestD3Zero:

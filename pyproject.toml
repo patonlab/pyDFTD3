@@ -20,9 +20,20 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 ase = ["ase"]
+dev = ["pytest", "ruff"]
 
 [project.scripts]
 pydftd3 = "dftd3.dftd3:main"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Legacy Grimme data arrays use tabs; reformatting would create a huge diff for no benefit
+"dftd3/pars.py" = ["W191", "E101"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -11,7 +11,6 @@ Requirements:
 """
 
 import numpy as np
-
 from ase.build import molecule
 
 
@@ -25,7 +24,7 @@ class ASEAdapter:
 
 
 def main():
-    from dftd3.dftd3 import CalcD3, AUTOKCAL
+    from dftd3.dftd3 import AUTOKCAL, CalcD3
 
     # --- Build a water dimer from ASE ---
     water = molecule("H2O")
@@ -45,7 +44,7 @@ def main():
     total_au = (result.attractive_r6_vdw + result.attractive_r8_vdw) / AUTOKCAL
     total_kcal = result.attractive_r6_vdw + result.attractive_r8_vdw
 
-    print(f"\nD3(BJ)/B3LYP dispersion correction:")
+    print("\nD3(BJ)/B3LYP dispersion correction:")
     print(f"  D3(R6)  = {result.attractive_r6_vdw / AUTOKCAL:12.8f} au")
     print(f"  D3(R8)  = {result.attractive_r8_vdw / AUTOKCAL:12.8f} au")
     print(f"  Total   = {total_au:12.8f} au  ({total_kcal:.4f} kcal/mol)")

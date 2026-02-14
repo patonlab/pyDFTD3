@@ -211,6 +211,9 @@ def _ncoord(natom, atomtype, xco, yco, zco):
             dy = yco[j] - yco[i]
             dz = zco[j] - zco[i]
             dist = math.sqrt(dx * dx + dy * dy + dz * dz)
+            # Guard against divide-by-zero when atoms have identical coordinates
+            if dist < 1e-8:
+                continue
             zj = _element_index(atomtype[j])
             rco = (rcov[zi] + rcov[zj]) * K2
             rr = rco / dist
@@ -508,7 +511,7 @@ def main():
         for cite in CITATIONS:
             print(f"  {cite}")
         print()
-        return
+        return 0
 
     # Collect input files from positional args and any extra args
     files = []
@@ -523,7 +526,7 @@ def main():
 
     if not files:
         print("\nNo valid files found!\n")
-        sys.exit(1)
+        return 1
 
     # Resolve the functional name through aliases
     dft_functional = None
@@ -541,7 +544,7 @@ def main():
                 print(f"\nUnable to match requested functional '{options.functional}' "
                       f"to stored {options.damp}-damping parameters!")
                 print(f"Available functionals: {', '.join(sorted(parm_dict.keys()))}\n")
-                sys.exit(1)
+                return 1
 
     if options.verbose:
         print()
@@ -549,6 +552,7 @@ def main():
             print(f"   {cite}")
         print()
 
+    exit_code = 0
     for filepath in files:
         try:
             data = ccread(filepath)
@@ -604,8 +608,10 @@ def main():
 
         except Exception as e:
             logger.error("Error processing %s: %s", filepath, e)
+            exit_code = 1
 
     print()
+    return exit_code
 
 
 if __name__ == "__main__":
