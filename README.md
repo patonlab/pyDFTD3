@@ -48,12 +48,10 @@ Structure files are available in the `examples/` directory.
 ```
 $ python -m dftd3 examples/formic_acid_dimer.log
 
-   D3(0): Grimme et al. J. Chem. Phys. 2010, 132, 154104.
-
-   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
-   ------------------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                -0.00091286   -0.00434660                    -0.00525946
-   ------------------------------------------------------------------------------------------------------
+   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   ----------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                 -0.000913  -0.004347                  -0.005259
+   ----------------------------------------------------------------------------------------------
 ```
 
 2. **D3(BJ) damping** from a Gaussian output file.
@@ -61,12 +59,10 @@ $ python -m dftd3 examples/formic_acid_dimer.log
 ```
 $ python -m dftd3 examples/formic_acid_dimer.log --damp bj
 
-   D3(BJ): Grimme et al. J. Comput. Chem. 2011, 32, 1456-1465.
-
-   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
-   ------------------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                -0.00455241   -0.00457708                    -0.00912948
-   ------------------------------------------------------------------------------------------------------
+   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   ----------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                 -0.004552  -0.004577                  -0.009129
+   ----------------------------------------------------------------------------------------------
 ```
 
 3. **D3(BJ) with 3-body term** enabled via `--abc`.
@@ -74,21 +70,32 @@ $ python -m dftd3 examples/formic_acid_dimer.log --damp bj
 ```
 $ python -m dftd3 examples/formic_acid_dimer.log --damp bj --abc
 
-   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
-   ------------------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.log                -0.00455241   -0.00457708   -0.00000000      -0.00912948
-   ------------------------------------------------------------------------------------------------------
+   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   ----------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                 -0.004552  -0.004577  -0.000000       -0.009129
+   ----------------------------------------------------------------------------------------------
 ```
 
-4. **XYZ input** with explicit functional. For file formats without embedded DFT metadata (XYZ, PDB, SDF), the functional must be specified with `--func`.
+4. **Output in kcal/mol** using `--kcal`.
+
+```
+$ python -m dftd3 examples/formic_acid_dimer.log --damp bj --kcal
+
+   Species                                           D3(R6)     D3(R8)        ABC Etot (kcal/mol)
+   ----------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.log                     -2.86      -2.87                      -5.73
+   ----------------------------------------------------------------------------------------------
+```
+
+5. **XYZ input** with explicit functional. For file formats without embedded DFT metadata (XYZ, PDB, SDF), the functional must be specified with `--func`.
 
 ```
 $ python -m dftd3 examples/formic_acid_dimer.xyz --func b3lyp --damp bj
 
-   Species                                            D3(R6)        D3(R8)           ABC   Etot (Hartree)
-   ------------------------------------------------------------------------------------------------------
-   examples/formic_acid_dimer.xyz                -0.00455241   -0.00457708                    -0.00912949
-   ------------------------------------------------------------------------------------------------------
+   Species                                           D3(R6)     D3(R8)        ABC  Etot (Hartree)
+   ----------------------------------------------------------------------------------------------
+   examples/formic_acid_dimer.xyz                 -0.004552  -0.004577                  -0.009129
+   ----------------------------------------------------------------------------------------------
 ```
 
 ## Cutoff Radius Benchmark
@@ -107,7 +114,7 @@ By default, all pairwise interactions are included (no cutoff). A distance cutof
 | 30 | -528.053 | +0.001 | 8.5 |
 | None | -528.054 | reference | 11.5 |
 
-**3I40 protein** (446 atoms):
+**Human Insulin A chain, PDB: 3I40** (446 atoms):
 
 | Cutoff | Edisp (kcal/mol) | Error (kcal/mol) | Time (s) |
 |-------:|-----------------:|-----------------:|---------:|

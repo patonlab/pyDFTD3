@@ -713,11 +713,11 @@ def main():
 
     # Table formatting constants
     name_w = 45  # width of the species column
-    c1_w = 11   # D3(R6)
-    c2_w = 13   # D3(R8)
-    c3_w = 13   # ABC
-    c4_w = 16   # Total
-    fmt_dp = 2 if options.kcal else 8  # decimal places
+    c1_w = 10   # D3(R6)
+    c2_w = 10   # D3(R8)
+    c3_w = 10   # ABC
+    c4_w = 15   # Total
+    fmt_dp = 2 if options.kcal else 6  # decimal places
     total_label = "Etot (kcal/mol)" if options.kcal else "Etot (Hartree)"
     do_pairwise = options.pairwise is not None
     if do_pairwise:
