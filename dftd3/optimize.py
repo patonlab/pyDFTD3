@@ -141,7 +141,7 @@ class OptimizeConfig:
     tol: float = 1e-6
     popsize: int = 15
     workers: int = 1
-    s8_bounds: tuple = (0.0, 3.0)
+    s8_bounds: tuple = (0.0, 4.0)
     a1_bounds: tuple = (0.0, 1.0)
     a2_bounds: tuple = (2.0, 9.0)
     rs6_bounds: tuple = (0.5, 2.0)
@@ -256,7 +256,11 @@ def train_test_split(reactions, test_fraction, seed):
     train, test = [], []
     for subset_name in sorted(by_subset):
         subset_rxns = by_subset[subset_name]
-        n_test = max(1, int(len(subset_rxns) * test_fraction))
+        n_test = round(len(subset_rxns) * test_fraction)
+        if n_test == 0:
+            # Subset too small for requested fraction — keep all in train
+            train.extend(subset_rxns)
+            continue
         if n_test >= len(subset_rxns):
             n_test = max(1, len(subset_rxns) // 2)
         indices = rng.permutation(len(subset_rxns))
@@ -405,67 +409,130 @@ def fit_d3_params(dataset, dft_energies, config=None):
 # Output formatting
 # ---------------------------------------------------------------------------
 
-def print_results(result):
+def _published_params_array(functional, damp):
+    """Return published parameter array for the functional, or None."""
+    if not functional:
+        return None
+    from .pars import bj_parms, zero_parms, resolve_functional
+    canonical = resolve_functional(functional)
+    if canonical is None:
+        return None
+    if damp == "bj" and canonical in bj_parms:
+        p = bj_parms[canonical]
+        return [p[2], p[1], p[3]]  # s8, a1, a2
+    elif damp == "zero" and canonical in zero_parms:
+        p = zero_parms[canonical]
+        return [p[1], p[2]]  # rs6, s8
+    return None
+
+
+def compute_published_stats(dataset, dft_energies, functional, damp):
+    """Compute statistics for published parameters, if they exist.
+
+    Returns a tuple (wmad, mad, rmsd, max_err, n) or None.
+    """
+    pub_params = _published_params_array(functional, damp)
+    if pub_params is None:
+        return None
+    intermediates = {}
+    for sp_name, sp in dataset.species.items():
+        intermediates[sp_name] = precompute_d3(sp)
+    wmad, mad, rmsd, max_err = _compute_statistics(
+        dataset.reactions, intermediates, dft_energies, damp, pub_params)
+    return (wmad, mad, rmsd, max_err, len(dataset.reactions))
+
+
+def print_results(result, verbose=False, functional=None, basis=None,
+                  published_stats=None):
     """Print formatted optimization results."""
     print()
-    print("=" * 72)
-    print("D3 Parameter Optimization Results")
-    print("=" * 72)
+    print("   "+"=" * 72)
+    print("   D3 Parameter Optimization Results")
+    print("   "+"=" * 72)
     print()
 
+    if functional:
+        print(f"   Functional:        {functional}")
+    if basis:
+        print(f"   Basis set:         {basis}")
     damp_label = "Becke-Johnson (BJ)" if result.damp == "bj" else "Zero"
-    print(f"  Damping scheme:    {damp_label}")
-    print(f"  Train / Test:      {result.n_train} / {result.n_test}")
-    print(f"  Elapsed time:      {result.elapsed_seconds:.1f} s")
+    print(f"   Damping scheme:    {damp_label}")
+    print(f"   Train / Test:      {result.n_train} / {result.n_test}")
+    print(f"   Elapsed time:      {result.elapsed_seconds:.1f} s")
 
     print()
-    print("-" * 72)
-    print("Optimized Parameters")
-    print("-" * 72)
+    print("   "+"-" * 72)
+    print("   Optimized Parameters")
+    print("   "+"-" * 72)
 
-    for key, val in result.params.items():
-        fixed = "  (fixed)" if key == "s6" else ""
-        print(f"  {key:4s} = {val:.4f}{fixed}")
+    # Look up published parameters for comparison
+    published = None
+    if functional:
+        from .pars import bj_parms, zero_parms, resolve_functional
+        canonical = resolve_functional(functional)
+        if canonical is not None and result.damp == "bj" and canonical in bj_parms:
+            p = bj_parms[canonical]
+            published = {"s6": p[0], "a1": p[1], "s8": p[2], "a2": p[3]}
+        elif canonical is not None and result.damp == "zero" and canonical in zero_parms:
+            p = zero_parms[canonical]
+            published = {"s6": p[0], "rs6": p[1], "s8": p[2]}
+
+    if published:
+        print(f"   {'':4s}   {'Optimized':>10s}  {'Published':>10s}")
+        for key, val in result.params.items():
+            fixed = "  (fixed)" if key == "s6" else ""
+            pub_val = published.get(key)
+            print(f"   {key:4s}   {val:10.4f}  {pub_val:10.4f}{fixed}")
+    else:
+        for key, val in result.params.items():
+            fixed = "  (fixed)" if key == "s6" else ""
+            print(f"   {key:4s} = {val:.4f}{fixed}")
+        if functional:
+            print(f"\n   No published {damp_label} parameters found for {functional}")
 
     # CLI command
     cli_parts = " ".join(f"--{k} {v}" for k, v in result.params.items())
-    print(f"\n  pydftd3 CLI:  {cli_parts}")
+    print(f"\n   pydftd3 CLI:  {cli_parts}")
 
     print()
-    print("-" * 72)
-    print("Statistics (kcal/mol)")
-    print("-" * 72)
-    print(f"  {'':12s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s} {'Max Err':>8s}")
-    print(f"  {'Train:':12s} {result.weighted_mad:8.3f} {result.mad:8.3f} "
+    stat_label = "Statistics (kcal/mol)"
+    stat_header = f"   {stat_label:<24s} {'N':>5s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s} {'Max Err':>8s}"
+    print("   " + "-" * 72)
+    print(stat_header)
+    print("   " + "-" * 72)
+    print(f"   {'Train:':<24s} {result.n_train:5d} {result.weighted_mad:8.3f} {result.mad:8.3f} "
           f"{result.rmsd:8.3f} {result.max_error:8.3f}")
-    if result.test_wmad is not None:
-        print(f"  {'Test:':12s} {result.test_weighted_mad:8.3f} {result.test_mad:8.3f} "
+    if result.test_weighted_mad is not None:
+        print(f"   {'Test:':<24s} {result.n_test:5d} {result.test_weighted_mad:8.3f} {result.test_mad:8.3f} "
               f"{result.test_rmsd:8.3f} {result.test_max_error:8.3f}")
+    if published_stats is not None:
+        pw, pm, pr, px, pn = published_stats
+        print(f"   {'Published:':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
 
     # Per-subset breakdown
-    print()
-    print("-" * 72)
-    print("Per-Subset Breakdown")
-    print("-" * 72)
-    print(f"  {'Subset':<24s} {'N':>4s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s}")
+    if verbose:
+        print()
+        print("   " + "-" * 72)
+        print(f"   {'Per-Subset Breakdown':<24s} {'N':>5s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s} {'Max Err':>8s}")
+        print("   " + "-" * 72)
 
-    by_subset = {}
-    for entry in result.per_reaction_errors:
-        by_subset.setdefault(entry["subset"], []).append(entry)
+        by_subset = {}
+        for entry in result.per_reaction_errors:
+            by_subset.setdefault(entry["subset"], []).append(entry)
 
-    for subset_name in sorted(by_subset):
-        entries = by_subset[subset_name]
-        n = len(entries)
-        abs_errors = [abs(e["error"]) for e in entries]
-        weights = [e["weight"] for e in entries]
-        w_sum = sum(weights)
-        wmad = sum(w * ae for w, ae in zip(weights, abs_errors)) / w_sum if w_sum > 0 else 0.0
-        mad = np.mean(abs_errors)
-        rmsd = np.sqrt(np.mean([e["error"] ** 2 for e in entries]))
-        print(f"  {subset_name:<24s} {n:4d} {wmad:8.3f} {mad:8.3f} {rmsd:8.3f}")
+        for subset_name in sorted(by_subset):
+            entries = by_subset[subset_name]
+            n = len(entries)
+            abs_errors = [abs(e["error"]) for e in entries]
+            weights = [e["weight"] for e in entries]
+            w_sum = sum(weights)
+            wmad = sum(w * ae for w, ae in zip(weights, abs_errors)) / w_sum if w_sum > 0 else 0.0
+            mad = np.mean(abs_errors)
+            rmsd = np.sqrt(np.mean([e["error"] ** 2 for e in entries]))
+            max_err = max(abs_errors)
+            print(f"   {subset_name:<24s} {n:5d} {wmad:8.3f} {mad:8.3f} {rmsd:8.3f} {max_err:8.3f}")
 
-    print()
-    print("=" * 72)
+    print("   "+"=" * 72)
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +571,11 @@ def optimize_main(argv):
     fit.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     fit.add_argument("--maxiter", type=int, default=1000, help="Max optimizer iterations (default: 1000)")
     fit.add_argument("--workers", type=int, default=1, help="Parallel workers (-1=all cores)")
+    fit.add_argument("--skip-missing", action="store_true",
+                     help="Skip reactions with missing DFT energies instead of aborting")
     fit.add_argument("--save-csv", default=None, help="Save per-reaction errors to CSV")
+    fit.add_argument("-v", dest="verbose", action="store_true", default=False,
+                     help="Print per-subset breakdown")
 
     args = parser.parse_args(argv)
 
@@ -522,7 +593,7 @@ def optimize_main(argv):
 def _cmd_prep(args):
     """Handle 'pydftd3 optimize prep' command."""
     dataset = load_dataset(args.dataset)
-    print(f"Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
+    print(f"\n   Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
 
     paths = generate_orca_inputs(
         dataset, args.output_dir, args.func,
@@ -536,28 +607,42 @@ def _cmd_prep(args):
 def _cmd_fit(args):
     """Handle 'pydftd3 optimize fit' command."""
     dataset = load_dataset(args.dataset)
-    print(f"Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
+    print(f"\n   Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
 
     # Load DFT energies
+    detected_functional = None
+    detected_basis = None
     if args.energies.endswith(".csv"):
-        dft_energies = read_energies_csv(args.energies)
+        dft_energies, detected_functional, detected_basis = read_energies_csv(args.energies)
     else:
-        dft_energies = parse_orca_outputs(args.energies)
+        dft_energies, detected_functional, detected_basis = parse_orca_outputs(args.energies)
         csv_path = os.path.join(args.energies, "dft_energies.csv")
-        write_energies_csv(dft_energies, csv_path)
-        print(f"Saved DFT energies to {csv_path}")
+        write_energies_csv(dft_energies, csv_path,
+                           functional=detected_functional, basis=detected_basis)
+        print(f"\n   Saved DFT energies to {csv_path}")
 
     # Validate completeness
     missing = set(dataset.species.keys()) - set(dft_energies.keys())
     if missing:
-        print(f"\nError: Missing DFT energies for {len(missing)} species:")
-        for name in sorted(missing)[:10]:
-            print(f"  - {name}")
-        if len(missing) > 10:
-            print(f"  ... and {len(missing) - 10} more")
-        return 1
+        if not args.skip_missing:
+            print(f"\n   Error: Missing DFT energies for {len(missing)} species:")
+            for name in sorted(missing)[:10]:
+                print(f"  - {name}")
+            if len(missing) > 10:
+                print(f"  ... and {len(missing) - 10} more")
+            print("\n   Use --skip-missing to drop reactions that reference these species.")
+            return 1
 
-    print(f"Loaded DFT energies for {len(dft_energies)} species")
+        # Filter out reactions that use missing species
+        n_before = len(dataset.reactions)
+        dataset.reactions = [
+            rxn for rxn in dataset.reactions
+            if not (set(rxn.stoichiometry.keys()) & missing)
+        ]
+        n_dropped = n_before - len(dataset.reactions)
+        print(f"   Skipping {len(missing)} missing species, dropped {n_dropped}/{n_before} reactions")
+
+    print(f"   Loaded DFT energies for {len(dft_energies)} species, {len(dataset.reactions)} reactions")
 
     config = OptimizeConfig(
         damp=args.damp,
@@ -568,11 +653,18 @@ def _cmd_fit(args):
         workers=args.workers,
     )
 
+    pub_stats = compute_published_stats(
+        dataset, dft_energies, detected_functional, args.damp)
+
     if args.folds > 0:
-        _cmd_fit_cv(dataset, dft_energies, config, args)
+        _cmd_fit_cv(dataset, dft_energies, config, args,
+                    functional=detected_functional, basis=detected_basis,
+                    published_stats=pub_stats)
     else:
         result = fit_d3_params(dataset, dft_energies, config)
-        print_results(result)
+        print_results(result, verbose=args.verbose,
+                      functional=detected_functional, basis=detected_basis,
+                      published_stats=pub_stats)
 
         if args.save_csv:
             _save_errors_csv(result, args.save_csv)
@@ -580,9 +672,33 @@ def _cmd_fit(args):
     return 0
 
 
-def _cmd_fit_cv(dataset, dft_energies, config, args):
-    """Run k-fold cross-validation."""
+def _fit_one_fold(fold_idx, train_rxns, test_rxns, intermediates, dft_energies, config):
+    """Fit a single CV fold. Designed to be called in parallel."""
     from scipy.optimize import differential_evolution
+
+    if config.damp == "bj":
+        bounds = [config.s8_bounds, config.a1_bounds, config.a2_bounds]
+    else:
+        bounds = [config.rs6_bounds, config.s8_bounds]
+
+    def objective(params):
+        return _weighted_mad(train_rxns, intermediates, dft_energies, config.damp, params)
+
+    result = differential_evolution(
+        objective, bounds=bounds,
+        maxiter=config.maxiter, tol=config.tol,
+        popsize=config.popsize, seed=config.random_seed + fold_idx,
+    )
+
+    test_wmad, test_mad, test_rmsd, test_max = _compute_statistics(
+        test_rxns, intermediates, dft_energies, config.damp, result.x)
+    return (result.x, test_wmad, test_mad, test_rmsd)
+
+
+def _cmd_fit_cv(dataset, dft_energies, config, args, functional=None, basis=None,
+                published_stats=None):
+    """Run k-fold cross-validation."""
+    from concurrent.futures import ProcessPoolExecutor, as_completed
 
     folds = k_fold_split(dataset.reactions, config.n_folds, config.random_seed)
 
@@ -591,45 +707,49 @@ def _cmd_fit_cv(dataset, dft_energies, config, args):
     for sp_name, sp in dataset.species.items():
         intermediates[sp_name] = precompute_d3(sp)
 
-    fold_results = []
-    for fold_idx, (train_rxns, test_rxns) in enumerate(folds):
-        if config.damp == "bj":
-            bounds = [config.s8_bounds, config.a1_bounds, config.a2_bounds]
-        else:
-            bounds = [config.rs6_bounds, config.s8_bounds]
-
-        def objective(params, rxns=train_rxns):
-            return _weighted_mad(rxns, intermediates, dft_energies, config.damp, params)
-
-        result = differential_evolution(
-            objective, bounds=bounds,
-            maxiter=config.maxiter, tol=config.tol,
-            popsize=config.popsize, seed=config.random_seed + fold_idx,
-        )
-
-        test_wmad, test_mad, test_rmsd, test_max = _compute_statistics(
-            test_rxns, intermediates, dft_energies, config.damp, result.x)
-        fold_results.append((result.x, test_wmad, test_mad, test_rmsd))
+    n_workers = args.workers if args.workers > 0 else None  # None = all cores
+    if n_workers == 1 or config.n_folds == 1:
+        # Sequential fallback
+        fold_results = []
+        for fold_idx, (train_rxns, test_rxns) in enumerate(folds):
+            r = _fit_one_fold(fold_idx, train_rxns, test_rxns,
+                              intermediates, dft_energies, config)
+            fold_results.append(r)
+            print(f"   Fold {fold_idx + 1}/{config.n_folds} complete (WMAD: {r[1]:.3f})")
+    else:
+        print(f"   Running {config.n_folds} folds in parallel ({n_workers or 'all'} workers)...")
+        fold_results = [None] * config.n_folds
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {}
+            for fold_idx, (train_rxns, test_rxns) in enumerate(folds):
+                fut = executor.submit(
+                    _fit_one_fold, fold_idx, train_rxns, test_rxns,
+                    intermediates, dft_energies, config)
+                futures[fut] = fold_idx
+            for fut in as_completed(futures):
+                idx = futures[fut]
+                fold_results[idx] = fut.result()
+                print(f"   Fold {idx + 1}/{config.n_folds} complete (WMAD: {fold_results[idx][1]:.3f})")
 
     # Print CV results
     print()
-    print("=" * 72)
-    print(f"Cross-Validation Results ({config.n_folds} folds)")
-    print("=" * 72)
-    print(f"\n  {'Fold':>4s}  {'WMAD':>8s}  {'MAD':>8s}  {'RMSD':>8s}")
+    print("   "+"=" * 72)
+    print(f"   Cross-Validation Results ({config.n_folds} folds)")
+    print("    "+"=" * 72)
+    print(f"\n   {'Fold':>4s}  {'WMAD':>8s}  {'MAD':>8s}  {'RMSD':>8s}")
 
     wmads = [r[1] for r in fold_results]
     mads = [r[2] for r in fold_results]
     rmsds = [r[3] for r in fold_results]
 
     for i, (_, wmad, mad, rmsd) in enumerate(fold_results):
-        print(f"  {i + 1:4d}  {wmad:8.3f}  {mad:8.3f}  {rmsd:8.3f}")
+        print(f"   {i + 1:4d}  {wmad:8.3f}  {mad:8.3f}  {rmsd:8.3f}")
 
-    print(f"  {'Mean':>4s}  {np.mean(wmads):8.3f}  {np.mean(mads):8.3f}  {np.mean(rmsds):8.3f}")
-    print(f"  {'Std':>4s}  {np.std(wmads):8.3f}  {np.std(mads):8.3f}  {np.std(rmsds):8.3f}")
+    print(f"   {'Mean':>4s}  {np.mean(wmads):8.3f}  {np.mean(mads):8.3f}  {np.mean(rmsds):8.3f}")
+    print(f"   {'Std':>4s}  {np.std(wmads):8.3f}  {np.std(mads):8.3f}  {np.std(rmsds):8.3f}")
 
     # Final fit on all data
-    print("\n  Fitting on all data for final parameters...")
+    print("\n   Fitting on all data for final parameters...")
     config_all = OptimizeConfig(
         damp=config.damp,
         test_fraction=0.0,
@@ -639,7 +759,9 @@ def _cmd_fit_cv(dataset, dft_energies, config, args):
         popsize=config.popsize,
     )
     final_result = fit_d3_params(dataset, dft_energies, config_all)
-    print_results(final_result)
+    print_results(final_result, verbose=args.verbose,
+                  functional=functional, basis=basis,
+                  published_stats=published_stats)
 
 
 def _save_errors_csv(result, csv_path):

@@ -316,7 +316,7 @@ class TestCSVIO:
         energies = {"mol_A": -76.123456789012, "mol_B": -152.789012345678}
         csv_path = str(tmp_path / "energies.csv")
         write_energies_csv(energies, csv_path)
-        loaded = read_energies_csv(csv_path)
+        loaded, _, _ = read_energies_csv(csv_path)
         assert loaded["mol_A"] == pytest.approx(-76.123456789012, abs=1e-10)
         assert loaded["mol_B"] == pytest.approx(-152.789012345678, abs=1e-10)
 

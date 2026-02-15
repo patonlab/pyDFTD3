@@ -26,6 +26,12 @@ _ELEMENT_TO_Z = {
     "Rb": 37, "Sr": 38, "Y": 39, "Zr": 40, "Nb": 41, "Mo": 42, "Tc": 43,
     "Ru": 44, "Rh": 45, "Pd": 46, "Ag": 47, "Cd": 48, "In": 49, "Sn": 50,
     "Sb": 51, "Te": 52, "I": 53, "Xe": 54,
+    "Cs": 55, "Ba": 56, "La": 57, "Ce": 58, "Pr": 59, "Nd": 60, "Pm": 61,
+    "Sm": 62, "Eu": 63, "Gd": 64, "Tb": 65, "Dy": 66, "Ho": 67, "Er": 68,
+    "Tm": 69, "Yb": 70, "Lu": 71, "Hf": 72, "Ta": 73, "W": 74, "Re": 75,
+    "Os": 76, "Ir": 77, "Pt": 78, "Au": 79, "Hg": 80, "Tl": 81, "Pb": 82,
+    "Bi": 83, "Po": 84, "At": 85, "Rn": 86, "Fr": 87, "Ra": 88, "Ac": 89,
+    "Th": 90, "Pa": 91, "U": 92, "Np": 93, "Pu": 94,
 }
 
 
@@ -147,7 +153,7 @@ def load_dataset(yaml_path):
             ))
 
     dataset_name = os.path.splitext(os.path.basename(yaml_path))[0]
-    logger.info("Loaded %d reactions, %d unique species from %s",
+    logger.info("\n   Loaded %d reactions, %d unique species from %s",
                 len(reactions), len(species), yaml_path)
 
     return Dataset(name=dataset_name, reactions=reactions, species=species)
@@ -183,6 +189,7 @@ def generate_orca_inputs(dataset, output_dir, functional, basis="def2-TZVP",
     """
     os.makedirs(output_dir, exist_ok=True)
     paths = []
+    name_map = {}  # safe_name -> original species name
 
     keywords = f"{functional} {basis}"
     if extra_keywords:
@@ -192,6 +199,7 @@ def generate_orca_inputs(dataset, output_dir, functional, basis="def2-TZVP",
         # Sanitize filename
         safe_name = re.sub(r'[^\w\-.]', '_', sp_name)
         inp_path = os.path.join(output_dir, f"{safe_name}.inp")
+        name_map[safe_name] = sp_name
 
         lines = [
             f"! {keywords}",
@@ -209,8 +217,30 @@ def generate_orca_inputs(dataset, output_dir, functional, basis="def2-TZVP",
 
         paths.append(inp_path)
 
+    # Write name mapping so parse_orca_outputs can map filenames back
+    _write_name_map(name_map, os.path.join(output_dir, "species_map.csv"))
+
     logger.info("Generated %d ORCA input files in %s", len(paths), output_dir)
     return paths
+
+
+def _write_name_map(name_map, csv_path):
+    """Write filename-to-species name mapping CSV."""
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["safe_name", "species_name"])
+        for safe, original in sorted(name_map.items()):
+            writer.writerow([safe, original])
+
+
+def _read_name_map(csv_path):
+    """Read filename-to-species name mapping CSV."""
+    name_map = {}
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name_map[row["safe_name"]] = row["species_name"]
+    return name_map
 
 
 def parse_orca_outputs(output_dir):
@@ -231,13 +261,25 @@ def parse_orca_outputs(output_dir):
     """
     energies = {}
     pattern = re.compile(r"FINAL SINGLE POINT ENERGY\s+([-\d.]+)")
+    func_pattern = re.compile(r"The (\S+) functional is recognized")
+    basis_pattern = re.compile(r"Your calculation utilizes the basis:\s+(\S+)")
+    input_echo_pattern = re.compile(r"\|\s+\d+>\s+!\s+(.*)")
+
+    # Load name mapping if available (written by generate_orca_inputs)
+    map_path = os.path.join(output_dir, "species_map.csv")
+    name_map = _read_name_map(map_path) if os.path.exists(map_path) else {}
+
+    detected_functional = None
+    detected_basis = None
+    input_echo_keywords = None
 
     for fname in sorted(os.listdir(output_dir)):
         if not fname.endswith(".out"):
             continue
 
         filepath = os.path.join(output_dir, fname)
-        sp_name = os.path.splitext(fname)[0]
+        safe_name = os.path.splitext(fname)[0]
+        sp_name = name_map.get(safe_name, safe_name)
         energy = None
 
         with open(filepath) as f:
@@ -245,17 +287,41 @@ def parse_orca_outputs(output_dir):
                 match = pattern.search(line)
                 if match:
                     energy = float(match.group(1))
+                if detected_functional is None:
+                    fm = func_pattern.search(line)
+                    if fm:
+                        detected_functional = fm.group(1)
+                if detected_basis is None:
+                    bm = basis_pattern.search(line)
+                    if bm:
+                        detected_basis = bm.group(1)
+                if input_echo_keywords is None:
+                    em = input_echo_pattern.match(line)
+                    if em:
+                        input_echo_keywords = em.group(1).split()
 
         if energy is not None:
             energies[sp_name] = energy
         else:
-            logger.warning("No FINAL SINGLE POINT ENERGY found in %s", fname)
+            logger.warning("!  No FINAL SINGLE POINT ENERGY found in %s", fname)
+
+    # Fallback: extract functional from input echo keywords
+    if detected_functional is None and input_echo_keywords:
+        from .pars import bj_parms, zero_parms, resolve_functional
+        known = set(bj_parms) | set(zero_parms)
+        for kw in input_echo_keywords:
+            # Strip trailing /G (Gaussian compatibility notation)
+            clean = kw.rstrip("/G").rstrip("/g")
+            canonical = resolve_functional(clean)
+            if canonical in known or clean.upper() in known:
+                detected_functional = canonical if canonical in known else clean.upper()
+                break
 
     logger.info("Parsed %d ORCA output files from %s", len(energies), output_dir)
-    return energies
+    return energies, detected_functional, detected_basis
 
 
-def write_energies_csv(energies, csv_path):
+def write_energies_csv(energies, csv_path, functional=None, basis=None):
     """Write species DFT energies to a CSV file.
 
     Parameters
@@ -264,8 +330,16 @@ def write_energies_csv(energies, csv_path):
         {species_name: energy_in_hartree}
     csv_path : str
         Output CSV path.
+    functional : str or None
+        DFT functional name to store as metadata comment.
+    basis : str or None
+        Basis set name to store as metadata comment.
     """
     with open(csv_path, "w", newline="") as f:
+        if functional:
+            f.write(f"# functional: {functional}\n")
+        if basis:
+            f.write(f"# basis: {basis}\n")
         writer = csv.writer(f)
         writer.writerow(["species_name", "energy_hartree"])
         for name in sorted(energies):
@@ -282,12 +356,26 @@ def read_energies_csv(csv_path):
 
     Returns
     -------
-    dict of str to float
-        {species_name: energy_in_hartree}
+    (energies, functional, basis) : tuple
+        energies is {species_name: energy_in_hartree},
+        functional and basis are str or None (parsed from comment lines).
     """
     energies = {}
+    functional = None
+    basis = None
     with open(csv_path) as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            energies[row["species_name"]] = float(row["energy_hartree"])
-    return energies
+        lines = f.readlines()
+
+    data_lines = []
+    for line in lines:
+        if line.startswith("# functional:"):
+            functional = line.split(":", 1)[1].strip()
+        elif line.startswith("# basis:"):
+            basis = line.split(":", 1)[1].strip()
+        elif not line.startswith("#"):
+            data_lines.append(line)
+
+    reader = csv.DictReader(data_lines)
+    for row in reader:
+        energies[row["species_name"]] = float(row["energy_hartree"])
+    return energies, functional, basis
