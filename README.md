@@ -4,7 +4,7 @@
 
 pyDFTD3 computes Grimme's D3 dispersion energy corrections for molecular geometries. It implements both zero-damping and Becke-Johnson (BJ) damping schemes with optional 3-body Axilrod-Teller-Muto terms.
 
-Supported input formats: Gaussian/ORCA output files (`.log`, `.out`), XYZ, PDB, and SDF. For Gaussian and ORCA output files the density functional is detected automatically; for other formats use `--func` to specify the functional.
+Supported input formats: Gaussian/ORCA/Q-Chem output files (`.log`, `.out`), XYZ, PDB, and SDF. For computational chemistry output files the density functional is detected automatically; for other formats use `--func` to specify the functional.
 
 ## Installation
 

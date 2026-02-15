@@ -808,6 +808,11 @@ calcD3 = CalcD3
 # ---------------------------------------------------------------------------
 
 def main():
+    # Dispatch to optimize subcommand if requested
+    if len(sys.argv) > 1 and sys.argv[1] == "optimize":
+        from dftd3.optimize import optimize_main
+        return optimize_main(sys.argv[2:])
+
     parser = ArgumentParser(
         description="Compute Grimme's DFT-D3 dispersion correction.",
         epilog=f"{CITATION_ZERO}\n{CITATION_BJ}",

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=64"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyDFTD3"
@@ -20,7 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 ase = ["ase"]
-dev = ["pytest", "ruff"]
+optimize = ["scipy", "pyyaml"]
+dev = ["pytest", "ruff", "scipy", "pyyaml"]
 
 [project.scripts]
 pydftd3 = "dftd3.dftd3:main"
