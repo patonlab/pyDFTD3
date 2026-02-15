@@ -11,6 +11,7 @@ Supported input formats: Gaussian/ORCA/Q-Chem output files (`.log`, `.out`), XYZ
 ```bash
 pip install -e .              # editable install (creates `pydftd3` CLI)
 pip install -e ".[test]"      # with test dependencies (pytest)
+pip install -e ".[optimize]"  # with optimization dependencies (scipy, pyyaml)
 ```
 
 ## Usage
@@ -154,6 +155,79 @@ By default, all pairwise interactions are included (no cutoff). A distance cutof
 | None | -8984.027 | reference | 4.3 |
 
 A cutoff of 25 Angstrom recovers >99.99% of the full dispersion energy. The benchmarking script is available at `examples/benchmark_cutoff.py`.
+
+## Parameter Optimization
+
+pyDFTD3 can fit D3 damping parameters for functional/basis set combinations that lack published values, or to refit parameters against a custom benchmark. The workflow has two steps:
+
+### 1. Generate DFT inputs (`prep`)
+
+Create dispersion-free DFT input files for all species in a benchmark dataset:
+
+```bash
+pydftd3 optimize prep <dataset> -o <output_dir> --func <functional>
+```
+
+| Flag | Description |
+|------|-------------|
+| `<dataset>` | Dataset specifier (see below) |
+| `-o, --output-dir` | Directory for generated input files |
+| `--func` | DFT functional name |
+| `--basis` | Basis set (default: def2-TZVP) |
+| `--nprocs` | ORCA parallel processes (default: 8) |
+| `--maxcore` | Memory per core in MB (default: 4000) |
+| `--extra` | Additional ORCA keywords |
+
+Run the generated ORCA calculations externally, then proceed to fitting.
+
+### 2. Fit parameters (`fit`)
+
+Optimize D3 parameters against benchmark reference energies using `scipy.optimize.differential_evolution`:
+
+```bash
+pydftd3 optimize fit <dataset> --energies <dir_or_csv> --damp bj
+```
+
+| Flag | Description |
+|------|-------------|
+| `<dataset>` | Dataset specifier (see below) |
+| `--energies` | CSV file or directory of ORCA output files |
+| `--damp {zero,bj}` | Damping scheme (default: bj) |
+| `--test-frac` | Fraction for random test set (default: 0.2, 0=no split) |
+| `--test-subsets` | Hold out entire subsets for validation (e.g. `S66,WATER27`) |
+| `--folds` | k-fold cross-validation (0=single split, default: 0) |
+| `--val-dataset` | External validation dataset (repeatable) |
+| `--val-energies` | DFT energies for validation dataset (repeatable, paired with `--val-dataset`) |
+| `--skip-missing` | Skip reactions with missing DFT energies |
+| `--save-csv` | Save per-reaction errors to CSV |
+| `-v` | Print per-subset breakdown |
+
+### Dataset specifiers
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| YAML path | `AllElements_100.yaml` | DietGMTKN55 YAML file |
+| `gmtkn55` | `gmtkn55` | All 55 GMTKN55 subsets (requires [gmtkn](https://github.com/obackhouse/gmtkn)) |
+| `gmtkn55:subsets` | `gmtkn55:S22,S66,BH76` | Specific GMTKN55 subsets |
+| `nenci:path` | `nenci:nenci2021/` | NENCI-2021 dimer XYZ files |
+
+### Examples
+
+```bash
+# Prepare ORCA inputs for S22 and S66 subsets
+pydftd3 optimize prep gmtkn55:S22,S66 -o s22_s66/ --func PBE
+
+# Fit BJ parameters with 5-fold cross-validation
+pydftd3 optimize fit gmtkn55:S22 --energies s22_dft/ --damp bj --folds 5
+
+# Fit with an external validation set
+pydftd3 optimize fit data.yaml --energies dft.csv \
+    --val-dataset nenci:nenci2021/ --val-energies nenci_dft.csv
+
+# Hold out entire subsets for testing
+pydftd3 optimize fit gmtkn55:S22,S66,WATER27 --energies dft.csv \
+    --test-subsets S66,WATER27 --damp bj -v
+```
 
 ## Testing
 

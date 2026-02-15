@@ -21,6 +21,7 @@ dependencies = [
 test = ["pytest"]
 ase = ["ase"]
 optimize = ["scipy", "pyyaml"]
+# gmtkn55 support requires the gmtkn package: git clone https://github.com/obackhouse/gmtkn
 dev = ["pytest", "ruff", "scipy", "pyyaml"]
 
 [project.scripts]
