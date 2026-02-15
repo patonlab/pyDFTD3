@@ -2,15 +2,19 @@
 
 import os
 
+import numpy as np
 import pytest
 
 from dftd3.benchmark import (
     Dataset,
     Reaction,
     Species,
+    _ELEMENT_TO_Z,
     generate_orca_inputs,
     load_dataset,
+    load_nenci,
     read_energies_csv,
+    resolve_dataset,
     write_energies_csv,
 )
 from dftd3.dftd3 import AUTOKCAL, CalcD3
@@ -442,3 +446,253 @@ class TestParameterRecovery:
         assert result.params["a1"] == pytest.approx(known_a1, abs=0.05)
         assert result.params["a2"] == pytest.approx(known_a2, abs=0.05)
         assert result.weighted_mad < 0.01  # Should be near-zero
+
+
+# ---------------------------------------------------------------------------
+# NENCI-2021 loading
+# ---------------------------------------------------------------------------
+
+# Helper to write a synthetic NENCI XYZ file
+def _write_nenci_xyz(path, elements_A, positions_A, elements_B, positions_B,
+                     ref_energy, charge_A=0, mult_A=1, charge_B=0, mult_B=1):
+    """Write one synthetic NENCI-format XYZ file."""
+    natoms = len(elements_A) + len(elements_B)
+    dimer_charge = charge_A + charge_B
+    dimer_mult = 1  # assume singlet dimer
+    comment = (
+        f"{dimer_charge} {dimer_mult} "
+        f"{charge_A} {mult_A} {charge_B} {mult_B} "
+        f"{len(elements_A)} {len(elements_B)} "
+        f"{ref_energy}"
+    )
+    lines = [str(natoms), comment]
+    for el, pos in zip(elements_A, positions_A):
+        lines.append(f"{el}  {pos[0]:.6f}  {pos[1]:.6f}  {pos[2]:.6f}")
+    for el, pos in zip(elements_B, positions_B):
+        lines.append(f"{el}  {pos[0]:.6f}  {pos[1]:.6f}  {pos[2]:.6f}")
+    lines.append("")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
+@pytest.fixture
+def nenci_dir(tmp_path):
+    """Create a temp directory with 3 synthetic NENCI XYZ files."""
+    xyz_dir = tmp_path / "nenci_xyz"
+    xyz_dir.mkdir()
+
+    # Water dimer (config 1)
+    _write_nenci_xyz(
+        str(xyz_dir / "water_water_01.xyz"),
+        elements_A=["O", "H", "H"],
+        positions_A=[[0.0, 0.0, 0.0], [0.0, 0.76, -0.47], [0.0, -0.76, -0.47]],
+        elements_B=["O", "H", "H"],
+        positions_B=[[3.0, 0.0, 0.0], [3.0, 0.76, -0.47], [3.0, -0.76, -0.47]],
+        ref_energy=-4.97,
+    )
+
+    # Water dimer (config 2 — stretched)
+    _write_nenci_xyz(
+        str(xyz_dir / "water_water_02.xyz"),
+        elements_A=["O", "H", "H"],
+        positions_A=[[0.0, 0.0, 0.0], [0.0, 0.76, -0.47], [0.0, -0.76, -0.47]],
+        elements_B=["O", "H", "H"],
+        positions_B=[[5.0, 0.0, 0.0], [5.0, 0.76, -0.47], [5.0, -0.76, -0.47]],
+        ref_energy=-1.23,
+    )
+
+    # Methane-water
+    _write_nenci_xyz(
+        str(xyz_dir / "methane_water_01.xyz"),
+        elements_A=["C", "H", "H", "H", "H"],
+        positions_A=[
+            [0.0, 0.0, 0.0], [0.63, 0.63, 0.63],
+            [-0.63, -0.63, 0.63], [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63],
+        ],
+        elements_B=["O", "H", "H"],
+        positions_B=[[4.0, 0.0, 0.0], [4.0, 0.76, -0.47], [4.0, -0.76, -0.47]],
+        ref_energy=-0.65,
+    )
+
+    return str(xyz_dir)
+
+
+class TestLoadNENCI:
+    """Tests for loading NENCI-2021 XYZ files."""
+
+    def test_load_reaction_count(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        assert len(ds.reactions) == 3
+
+    def test_species_count(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        # 3 dimers × 3 species each = 9
+        assert len(ds.species) == 9
+
+    def test_species_naming(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        assert "NENCI-water_water_01" in ds.species
+        assert "NENCI-water_water_01_monA" in ds.species
+        assert "NENCI-water_water_01_monB" in ds.species
+
+    def test_monomer_atom_counts(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        # Water dimer: monA = 3 atoms (O,H,H), monB = 3 atoms (O,H,H)
+        assert ds.species["NENCI-water_water_01_monA"].natom == 3
+        assert ds.species["NENCI-water_water_01_monB"].natom == 3
+        # Methane-water: monA = 5 atoms (C,H,H,H,H), monB = 3 atoms (O,H,H)
+        assert ds.species["NENCI-methane_water_01_monA"].natom == 5
+        assert ds.species["NENCI-methane_water_01_monB"].natom == 3
+
+    def test_dimer_atom_count(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        assert ds.species["NENCI-water_water_01"].natom == 6
+        assert ds.species["NENCI-methane_water_01"].natom == 8
+
+    def test_stoichiometry(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        # Find the water_water_01 reaction (files sorted alphabetically)
+        rxn = [r for r in ds.reactions
+               if "NENCI-water_water_01" in r.stoichiometry][0]
+        # dimer = +1, monA = -1, monB = -1
+        assert rxn.stoichiometry["NENCI-water_water_01"] == 1
+        assert rxn.stoichiometry["NENCI-water_water_01_monA"] == -1
+        assert rxn.stoichiometry["NENCI-water_water_01_monB"] == -1
+
+    def test_reference_energy(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        refs = {list(r.stoichiometry.keys())[0]: r.reference_energy for r in ds.reactions}
+        assert refs["NENCI-water_water_01"] == pytest.approx(-4.97)
+        assert refs["NENCI-water_water_02"] == pytest.approx(-1.23)
+
+    def test_subset_label(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        assert all(r.subset == "NENCI" for r in ds.reactions)
+
+    def test_dataset_name(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        assert ds.name == "NENCI-2021"
+
+    def test_element_symbols_valid(self, nenci_dir):
+        ds = load_nenci(nenci_dir)
+        for sp in ds.species.values():
+            for el in sp.elements:
+                assert el in _ELEMENT_TO_Z
+
+    def test_d3_computable(self, nenci_dir):
+        """D3 intermediates can be computed for all NENCI species."""
+        ds = load_nenci(nenci_dir)
+        for sp in ds.species.values():
+            im = precompute_d3(sp)
+            energy = d3_energy_bj(im, 1.0, 1.9889, 0.3981, 4.4211)
+            assert np.isfinite(energy)
+
+    def test_missing_dir_raises(self):
+        with pytest.raises(FileNotFoundError):
+            load_nenci("/nonexistent/path")
+
+    def test_empty_dir_raises(self, tmp_path):
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        with pytest.raises(ValueError, match="No valid NENCI"):
+            load_nenci(str(empty_dir))
+
+    def test_resolve_dataset_nenci(self, nenci_dir):
+        ds = resolve_dataset(f"nenci:{nenci_dir}")
+        assert ds.name == "NENCI-2021"
+        assert len(ds.reactions) == 3
+
+
+# ---------------------------------------------------------------------------
+# GMTKN55 loading (requires gmtkn package)
+# ---------------------------------------------------------------------------
+
+gmtkn = pytest.importorskip("gmtkn")
+
+from dftd3.benchmark import load_gmtkn55  # noqa: E402
+
+
+class TestLoadGMTKN55:
+    """Tests for loading GMTKN55 subsets via the gmtkn package."""
+
+    def test_load_single_subset(self):
+        ds = load_gmtkn55(subsets=["S22"])
+        assert len(ds.reactions) == 22
+        assert all(r.subset == "S22" for r in ds.reactions)
+
+    def test_load_multiple_subsets(self):
+        ds = load_gmtkn55(subsets=["S22", "S66"])
+        subsets = {r.subset for r in ds.reactions}
+        assert subsets == {"S22", "S66"}
+        assert len(ds.reactions) == 22 + 66
+
+    def test_qualified_species_names(self):
+        ds = load_gmtkn55(subsets=["S22"])
+        for name in ds.species:
+            assert name.startswith("S22-")
+
+    def test_species_have_valid_atomnos(self):
+        ds = load_gmtkn55(subsets=["S22"])
+        for sp in ds.species.values():
+            assert all(z > 0 for z in sp.atomnos)
+
+    def test_element_symbols_normalized(self):
+        """Ensure element symbols are title-cased and in _ELEMENT_TO_Z."""
+        ds = load_gmtkn55(subsets=["G21EA"])
+        for sp in ds.species.values():
+            for el in sp.elements:
+                assert el in _ELEMENT_TO_Z, f"{el} not in _ELEMENT_TO_Z"
+
+    def test_stoichiometry_references_valid_species(self):
+        ds = load_gmtkn55(subsets=["S22"])
+        for rxn in ds.reactions:
+            for sp_name in rxn.stoichiometry:
+                assert sp_name in ds.species
+
+    def test_weights_default_to_one(self):
+        ds = load_gmtkn55(subsets=["S22"])
+        assert all(r.weight == 1.0 for r in ds.reactions)
+
+    def test_unknown_subset_raises(self):
+        with pytest.raises(ValueError, match="Unknown"):
+            load_gmtkn55(subsets=["NONEXISTENT"])
+
+    def test_case_insensitive_subset_names(self):
+        ds = load_gmtkn55(subsets=["s22"])
+        assert len(ds.reactions) == 22
+
+    def test_load_all_defaults(self):
+        ds = load_gmtkn55()
+        assert len(ds.reactions) > 1000
+        subsets = {r.subset for r in ds.reactions}
+        assert "S22" in subsets
+        assert "S66" in subsets
+        assert "BH76" in subsets
+
+
+class TestResolveDataset:
+    """Tests for resolve_dataset() dispatch."""
+
+    def test_yaml_path(self, mini_yaml):
+        ds = resolve_dataset(mini_yaml)
+        assert len(ds.reactions) == 3
+
+    def test_gmtkn55_single(self):
+        ds = resolve_dataset("gmtkn55:S22")
+        assert len(ds.reactions) == 22
+
+    def test_gmtkn55_multiple(self):
+        ds = resolve_dataset("gmtkn55:S22,S66")
+        assert {r.subset for r in ds.reactions} == {"S22", "S66"}
+
+    def test_gmtkn55_all(self):
+        ds = resolve_dataset("gmtkn55")
+        assert len(ds.reactions) > 1000
+
+    def test_precompute_d3_on_gmtkn_species(self):
+        """Ensure precompute_d3 works on gmtkn-loaded species."""
+        ds = load_gmtkn55(subsets=["S22"])
+        for sp in list(ds.species.values())[:5]:
+            im = precompute_d3(sp)
+            energy = d3_energy_bj(im, 1.0, 1.9889, 0.3981, 4.4211)
+            assert np.isfinite(energy)

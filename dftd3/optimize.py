@@ -9,6 +9,7 @@ optimization.
 
 import logging
 import os
+import sys
 import time
 from argparse import ArgumentParser
 from dataclasses import dataclass, field
@@ -17,9 +18,9 @@ import numpy as np
 
 from dftd3.benchmark import (
     generate_orca_inputs,
-    load_dataset,
     parse_orca_outputs,
     read_energies_csv,
+    resolve_dataset,
     write_energies_csv,
 )
 from dftd3.dftd3 import (
@@ -141,7 +142,7 @@ class OptimizeConfig:
     tol: float = 1e-6
     popsize: int = 15
     workers: int = 1
-    s8_bounds: tuple = (0.0, 4.0)
+    s8_bounds: tuple = (0.0, 3.0)
     a1_bounds: tuple = (0.0, 1.0)
     a2_bounds: tuple = (2.0, 9.0)
     rs6_bounds: tuple = (0.5, 2.0)
@@ -349,6 +350,18 @@ def fit_d3_params(dataset, dft_energies, config=None):
     def objective(params):
         return _weighted_mad(train_rxns, intermediates, dft_energies, config.damp, params)
 
+    # Progress callback
+    gen_count = [0]
+
+    def _progress(xk, convergence=0):
+        gen_count[0] += 1
+        wmad = _weighted_mad(train_rxns, intermediates, dft_energies, config.damp, xk)
+        sys.stdout.write(
+            f"\r   Generation {gen_count[0]:4d}  WMAD: {wmad:.4f}  "
+            f"convergence: {convergence:.2e}   "
+        )
+        sys.stdout.flush()
+
     # Run optimizer
     result = differential_evolution(
         objective,
@@ -358,7 +371,10 @@ def fit_d3_params(dataset, dft_energies, config=None):
         popsize=config.popsize,
         workers=config.workers,
         seed=config.random_seed,
+        callback=_progress,
     )
+    sys.stdout.write("\r" + " " * 70 + "\r")  # clear progress line
+    sys.stdout.flush()
 
     elapsed = time.perf_counter() - t0
 
@@ -426,10 +442,12 @@ def _published_params_array(functional, damp):
     return None
 
 
-def compute_published_stats(dataset, dft_energies, functional, damp):
+def compute_published_stats(dataset, dft_energies, functional, damp,
+                            test_reactions=None):
     """Compute statistics for published parameters, if they exist.
 
-    Returns a tuple (wmad, mad, rmsd, max_err, n) or None.
+    Returns a dict {"train": (wmad, mad, rmsd, max_err, n), ...} or None.
+    If test_reactions is provided, also includes a "test" key.
     """
     pub_params = _published_params_array(functional, damp)
     if pub_params is None:
@@ -437,13 +455,18 @@ def compute_published_stats(dataset, dft_energies, functional, damp):
     intermediates = {}
     for sp_name, sp in dataset.species.items():
         intermediates[sp_name] = precompute_d3(sp)
-    wmad, mad, rmsd, max_err = _compute_statistics(
+    tw, tm, tr, tx = _compute_statistics(
         dataset.reactions, intermediates, dft_energies, damp, pub_params)
-    return (wmad, mad, rmsd, max_err, len(dataset.reactions))
+    stats = {"train": (tw, tm, tr, tx, len(dataset.reactions))}
+    if test_reactions:
+        vw, vm, vr, vx = _compute_statistics(
+            test_reactions, intermediates, dft_energies, damp, pub_params)
+        stats["test"] = (vw, vm, vr, vx, len(test_reactions))
+    return stats
 
 
 def print_results(result, verbose=False, functional=None, basis=None,
-                  published_stats=None):
+                  published_stats=None, val_stats=None):
     """Print formatted optimization results."""
     print()
     print("   "+"=" * 72)
@@ -506,8 +529,17 @@ def print_results(result, verbose=False, functional=None, basis=None,
         print(f"   {'Test:':<24s} {result.n_test:5d} {result.test_weighted_mad:8.3f} {result.test_mad:8.3f} "
               f"{result.test_rmsd:8.3f} {result.test_max_error:8.3f}")
     if published_stats is not None:
-        pw, pm, pr, px, pn = published_stats
-        print(f"   {'Published:':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
+        if "test" in published_stats:
+            pw, pm, pr, px, pn = published_stats["train"]
+            print(f"   {'Published (train):':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
+            pw, pm, pr, px, pn = published_stats["test"]
+            print(f"   {'Published (test):':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
+        else:
+            pw, pm, pr, px, pn = published_stats["train"]
+            print(f"   {'Published:':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
+    if val_stats:
+        for label, vw, vm, vr, vx, vn in val_stats:
+            print(f"   {label + ':':<24s} {vn:5d} {vw:8.3f} {vm:8.3f} {vr:8.3f} {vx:8.3f}")
 
     # Per-subset breakdown
     if verbose:
@@ -549,7 +581,7 @@ def optimize_main(argv):
 
     # --- prep subcommand ---
     prep = subparsers.add_parser("prep", help="Generate ORCA input files from benchmark dataset.")
-    prep.add_argument("dataset", help="Path to DietGMTKN55 YAML file")
+    prep.add_argument("dataset", help="YAML file or 'gmtkn55' / 'gmtkn55:S22,S66'")
     prep.add_argument("-o", "--output-dir", required=True, help="Directory for ORCA input files")
     prep.add_argument("--func", required=True, help="DFT functional for ORCA")
     prep.add_argument("--basis", default="def2-TZVP", help="Basis set (default: def2-TZVP)")
@@ -559,7 +591,7 @@ def optimize_main(argv):
 
     # --- fit subcommand ---
     fit = subparsers.add_parser("fit", help="Optimize D3 parameters against benchmark data.")
-    fit.add_argument("dataset", help="Path to DietGMTKN55 YAML file")
+    fit.add_argument("dataset", help="YAML file or 'gmtkn55' / 'gmtkn55:S22,S66'")
     fit.add_argument("--energies", required=True,
                      help="CSV file with DFT energies, or directory of ORCA .out files")
     fit.add_argument("--damp", default="bj", choices=("zero", "bj"),
@@ -571,6 +603,13 @@ def optimize_main(argv):
     fit.add_argument("--seed", type=int, default=42, help="Random seed (default: 42)")
     fit.add_argument("--maxiter", type=int, default=1000, help="Max optimizer iterations (default: 1000)")
     fit.add_argument("--workers", type=int, default=1, help="Parallel workers (-1=all cores)")
+    fit.add_argument("--test-subsets", default=None,
+                     help="Hold out entire subsets for validation (comma-separated, e.g. S66,WATER27)")
+    fit.add_argument("--val-dataset", action="append", default=[],
+                     help="Validation dataset (repeatable). E.g. nenci:/path/to/xyz")
+    fit.add_argument("--val-energies", action="append", default=[],
+                     help="Validation DFT energies (repeatable). CSV or ORCA output dir. "
+                          "Must match --val-dataset count")
     fit.add_argument("--skip-missing", action="store_true",
                      help="Skip reactions with missing DFT energies instead of aborting")
     fit.add_argument("--save-csv", default=None, help="Save per-reaction errors to CSV")
@@ -592,7 +631,7 @@ def optimize_main(argv):
 
 def _cmd_prep(args):
     """Handle 'pydftd3 optimize prep' command."""
-    dataset = load_dataset(args.dataset)
+    dataset = resolve_dataset(args.dataset)
     print(f"\n   Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
 
     paths = generate_orca_inputs(
@@ -604,9 +643,82 @@ def _cmd_prep(args):
     return 0
 
 
+def _params_to_array(params_dict, damp):
+    """Convert parameter dict to array for _compute_statistics."""
+    if damp == "bj":
+        return [params_dict["s8"], params_dict["a1"], params_dict["a2"]]
+    else:
+        return [params_dict["rs6"], params_dict["s8"]]
+
+
+def _load_validation_datasets(args):
+    """Load external validation datasets and their DFT energies.
+
+    Returns list of (name, dataset, dft_energies) tuples, or None on error.
+    """
+    if not args.val_dataset:
+        return []
+
+    if len(args.val_dataset) != len(args.val_energies):
+        print(f"\n   Error: --val-dataset ({len(args.val_dataset)}) and "
+              f"--val-energies ({len(args.val_energies)}) must be specified "
+              f"the same number of times")
+        return None
+
+    results = []
+    for ds_arg, en_arg in zip(args.val_dataset, args.val_energies):
+        val_ds = resolve_dataset(ds_arg)
+        print(f"   Validation: {val_ds.name} — {len(val_ds.reactions)} reactions, "
+              f"{len(val_ds.species)} species")
+
+        if en_arg.endswith(".csv"):
+            val_energies, _, _ = read_energies_csv(en_arg)
+        else:
+            val_energies, _, _ = parse_orca_outputs(en_arg)
+
+        # Check for missing energies
+        missing = set(val_ds.species.keys()) - set(val_energies.keys())
+        if missing:
+            n_before = len(val_ds.reactions)
+            val_ds.reactions = [
+                rxn for rxn in val_ds.reactions
+                if not (set(rxn.stoichiometry.keys()) & missing)
+            ]
+            n_dropped = n_before - len(val_ds.reactions)
+            if n_dropped:
+                print(f"   Warning: {val_ds.name} — skipped {n_dropped}/{n_before} "
+                      f"reactions ({len(missing)} missing species)")
+
+        results.append((val_ds.name, val_ds, val_energies))
+
+    return results
+
+
+def _compute_val_stats(val_datasets, params_dict, damp):
+    """Compute statistics on external validation datasets.
+
+    Returns list of (label, wmad, mad, rmsd, max_err, n) tuples.
+    """
+    if not val_datasets:
+        return []
+
+    params_array = _params_to_array(params_dict, damp)
+    stats = []
+
+    for name, val_ds, val_energies in val_datasets:
+        intermediates = {}
+        for sp_name, sp in val_ds.species.items():
+            intermediates[sp_name] = precompute_d3(sp)
+        vw, vm, vr, vx = _compute_statistics(
+            val_ds.reactions, intermediates, val_energies, damp, params_array)
+        stats.append((name, vw, vm, vr, vx, len(val_ds.reactions)))
+
+    return stats
+
+
 def _cmd_fit(args):
     """Handle 'pydftd3 optimize fit' command."""
-    dataset = load_dataset(args.dataset)
+    dataset = resolve_dataset(args.dataset)
     print(f"\n   Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
 
     # Load DFT energies
@@ -644,9 +756,29 @@ def _cmd_fit(args):
 
     print(f"   Loaded DFT energies for {len(dft_energies)} species, {len(dataset.reactions)} reactions")
 
+    # Handle subset-based train/test split
+    test_subset_rxns = None
+    test_frac = args.test_frac
+    if args.test_subsets:
+        test_subset_names = {s.strip() for s in args.test_subsets.split(",")}
+        all_subsets = {r.subset for r in dataset.reactions}
+        unknown = test_subset_names - all_subsets
+        if unknown:
+            print(f"\n   Error: Test subsets not found in dataset: {sorted(unknown)}")
+            print(f"   Available subsets: {sorted(all_subsets)}")
+            return 1
+        test_subset_rxns = [r for r in dataset.reactions if r.subset in test_subset_names]
+        train_rxns = [r for r in dataset.reactions if r.subset not in test_subset_names]
+        print(f"   Train subsets: {sorted(all_subsets - test_subset_names)}")
+        print(f"   Test subsets:  {sorted(test_subset_names)}")
+        print(f"   Train / Test:  {len(train_rxns)} / {len(test_subset_rxns)} reactions")
+        # Replace dataset reactions with training only; disable random split
+        dataset.reactions = train_rxns
+        test_frac = 0.0
+
     config = OptimizeConfig(
         damp=args.damp,
-        test_fraction=args.test_frac,
+        test_fraction=test_frac,
         random_seed=args.seed,
         n_folds=args.folds,
         maxiter=args.maxiter,
@@ -654,17 +786,41 @@ def _cmd_fit(args):
     )
 
     pub_stats = compute_published_stats(
-        dataset, dft_energies, detected_functional, args.damp)
+        dataset, dft_energies, detected_functional, args.damp,
+        test_reactions=test_subset_rxns)
+
+    # Load external validation datasets
+    val_datasets = _load_validation_datasets(args)
+    if val_datasets is None:
+        return 1  # error already printed
 
     if args.folds > 0:
         _cmd_fit_cv(dataset, dft_energies, config, args,
                     functional=detected_functional, basis=detected_basis,
-                    published_stats=pub_stats)
+                    published_stats=pub_stats, val_datasets=val_datasets)
     else:
         result = fit_d3_params(dataset, dft_energies, config)
+
+        # Compute validation stats on held-out subsets
+        if test_subset_rxns:
+            intermediates = {}
+            for sp_name, sp in dataset.species.items():
+                intermediates[sp_name] = precompute_d3(sp)
+            params_array = _params_to_array(result.params, args.damp)
+            tw, tm, tr, tx = _compute_statistics(
+                test_subset_rxns, intermediates, dft_energies, args.damp, params_array)
+            result.test_weighted_mad = tw
+            result.test_mad = tm
+            result.test_rmsd = tr
+            result.test_max_error = tx
+            result.n_test = len(test_subset_rxns)
+
+        # Compute external validation stats
+        val_stats = _compute_val_stats(val_datasets, result.params, args.damp)
+
         print_results(result, verbose=args.verbose,
                       functional=detected_functional, basis=detected_basis,
-                      published_stats=pub_stats)
+                      published_stats=pub_stats, val_stats=val_stats)
 
         if args.save_csv:
             _save_errors_csv(result, args.save_csv)
@@ -696,7 +852,7 @@ def _fit_one_fold(fold_idx, train_rxns, test_rxns, intermediates, dft_energies, 
 
 
 def _cmd_fit_cv(dataset, dft_energies, config, args, functional=None, basis=None,
-                published_stats=None):
+                published_stats=None, val_datasets=None):
     """Run k-fold cross-validation."""
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -759,9 +915,13 @@ def _cmd_fit_cv(dataset, dft_energies, config, args, functional=None, basis=None
         popsize=config.popsize,
     )
     final_result = fit_d3_params(dataset, dft_energies, config_all)
+
+    # Compute external validation stats
+    val_stats = _compute_val_stats(val_datasets or [], final_result.params, config.damp)
+
     print_results(final_result, verbose=args.verbose,
                   functional=functional, basis=basis,
-                  published_stats=published_stats)
+                  published_stats=published_stats, val_stats=val_stats)
 
 
 def _save_errors_csv(result, csv_path):

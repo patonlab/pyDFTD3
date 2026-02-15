@@ -1,4 +1,8 @@
 *.pyc
+*.egg-info/
+.DS_Store
 CLAUDE.md
 timer.dat
 TODO*
+nenci2021/
+dft_data/

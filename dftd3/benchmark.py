@@ -1,9 +1,10 @@
 """
-benchmark.py - Load DietGMTKN55 benchmark datasets and generate ORCA inputs.
+benchmark.py - Load benchmark datasets and generate ORCA inputs.
 
 Provides tools for loading benchmark reaction datasets from DietGMTKN55 YAML
-files, generating ORCA input files for dispersion-free DFT calculations,
-and parsing ORCA outputs to extract single-point energies.
+files, GMTKN55 (via the gmtkn package), or NENCI-2021 XYZ files. Also
+generates ORCA input files for dispersion-free DFT calculations and parses
+ORCA outputs to extract single-point energies.
 """
 
 import csv
@@ -157,6 +158,279 @@ def load_dataset(yaml_path):
                 len(reactions), len(species), yaml_path)
 
     return Dataset(name=dataset_name, reactions=reactions, species=species)
+
+
+# The 55 canonical GMTKN55 subset names (Goerigk et al., PCCP 2017)
+GMTKN55_SUBSETS = frozenset([
+    "W4_11", "G21EA", "G21IP", "DIPCS10", "PA26", "SIE4x4", "ALKBDE10",
+    "YBDE18", "AL2X6", "HEAVYSB11", "NBPRC", "ALK8", "RC21", "G2RC",
+    "FH51", "TAUT15", "DC13", "MB16_43", "DARC", "RSE43", "BSR36",
+    "CDIE20", "ISO34", "ISOL24", "C60ISO", "PArel", "BH76", "BHPERI",
+    "BHDIV10", "INV24", "BHROT27", "PX13", "WCPT18", "RG18", "ADIM6",
+    "S22", "S66", "HEAVY28", "WATER27", "CARBHB12", "PNICO23", "HAL59",
+    "AHB21", "CHB6", "IL16", "IDISP", "ICONF", "ACONF", "Amino20x4",
+    "PCONF21", "MCONF", "SCONF", "UPU23", "BUT14DIOL",
+])
+
+
+def load_gmtkn55(subsets=None):
+    """Load GMTKN55 benchmark data from the gmtkn package.
+
+    Parameters
+    ----------
+    subsets : list of str, optional
+        Subset names to load (e.g., ["S22", "S66", "BH76"]).
+        If None, loads all 55 canonical GMTKN55 subsets.
+
+    Returns
+    -------
+    Dataset
+
+    Raises
+    ------
+    ImportError
+        If the gmtkn package is not installed.
+    ValueError
+        If a requested subset name is not found.
+    """
+    try:
+        import gmtkn
+    except ImportError:
+        raise ImportError(
+            "The 'gmtkn' package is required for GMTKN55 support. "
+            "Install it from: https://github.com/obackhouse/gmtkn"
+        )
+
+    available = set(gmtkn.sets.keys())
+    # Case-insensitive lookup table
+    available_lower = {k.lower(): k for k in available}
+
+    if subsets is None:
+        subset_names = sorted(GMTKN55_SUBSETS & available)
+    else:
+        subset_names = []
+        for s in subsets:
+            canonical = available_lower.get(s.lower())
+            if canonical is None:
+                raise ValueError(
+                    f"Unknown GMTKN subset: '{s}'. "
+                    f"Available: {sorted(available)}"
+                )
+            subset_names.append(canonical)
+
+    reactions = []
+    species = {}
+
+    for subset_name in subset_names:
+        subset_module = gmtkn.sets[subset_name]
+        gmtkn_systems = subset_module.systems
+
+        if not hasattr(subset_module, "reactions"):
+            logger.warning("Subset %s has no reactions, skipping", subset_name)
+            continue
+
+        gmtkn_reactions = subset_module.reactions
+
+        # Convert systems to Species objects
+        for sys_name, sys_data in gmtkn_systems.items():
+            qualified_name = f"{subset_name}-{sys_name}"
+            if qualified_name not in species:
+                species[qualified_name] = Species(
+                    name=qualified_name,
+                    charge=sys_data["charge"],
+                    uhf=sys_data["spin"],
+                    elements=[el.capitalize() for el in sys_data["atoms"]],
+                    positions=sys_data["coords"],
+                )
+
+        # Convert reactions
+        for rxn_idx, rxn_data in enumerate(gmtkn_reactions):
+            sys_names = rxn_data["systems"]
+            stoich_strs = rxn_data["stoichiometry"]
+            reference = rxn_data["reference"]
+
+            stoichiometry = {}
+            skip = False
+            for sys_name, coeff_str in zip(sys_names, stoich_strs):
+                qualified_name = f"{subset_name}-{sys_name}"
+                if qualified_name not in species:
+                    logger.warning(
+                        "Reaction %d in %s references unknown species '%s', skipping",
+                        rxn_idx + 1, subset_name, sys_name,
+                    )
+                    skip = True
+                    break
+                stoichiometry[qualified_name] = int(float(coeff_str))
+
+            if not skip:
+                reactions.append(Reaction(
+                    subset=subset_name,
+                    index=rxn_idx + 1,
+                    reference_energy=float(reference),
+                    weight=1.0,
+                    stoichiometry=stoichiometry,
+                ))
+
+    if subsets is None:
+        name = "GMTKN55"
+    elif len(subset_names) == 1:
+        name = subset_names[0]
+    else:
+        name = "GMTKN55_" + "+".join(subset_names)
+
+    logger.info(
+        "\n   Loaded %d reactions, %d unique species from GMTKN (%d subsets)",
+        len(reactions), len(species), len(subset_names),
+    )
+
+    return Dataset(name=name, reactions=reactions, species=species)
+
+
+def load_nenci(xyz_dir):
+    """Load NENCI-2021 dataset from a directory of dimer XYZ files.
+
+    Each XYZ file contains one dimer configuration. The comment line (line 2)
+    encodes monomer metadata and reference energies:
+
+        dimer_charge dimer_mult monA_charge monA_mult monB_charge monB_mult
+        natoms_A natoms_B  CCSD(T)/CBS  [other reference levels...]
+
+    Monomers appear in order: the first natoms_A atoms are monomer A, the
+    remaining natoms_B atoms are monomer B.
+
+    Parameters
+    ----------
+    xyz_dir : str
+        Directory containing .xyz files.
+
+    Returns
+    -------
+    Dataset
+    """
+    if not os.path.isdir(xyz_dir):
+        raise FileNotFoundError(f"NENCI directory not found: {xyz_dir}")
+
+    species = {}
+    reactions = []
+
+    for fname in sorted(os.listdir(xyz_dir)):
+        if not fname.endswith(".xyz"):
+            continue
+
+        filepath = os.path.join(xyz_dir, fname)
+        stem = os.path.splitext(fname)[0]
+
+        with open(filepath) as f:
+            natoms = int(f.readline().strip())
+            comment_parts = f.readline().strip().split()
+
+            if len(comment_parts) < 9:
+                logger.warning("Skipping %s: comment line has fewer than 9 fields", fname)
+                continue
+
+            dimer_charge = int(comment_parts[0])
+            dimer_mult = int(comment_parts[1])
+            monA_charge = int(comment_parts[2])
+            monA_mult = int(comment_parts[3])
+            monB_charge = int(comment_parts[4])
+            monB_mult = int(comment_parts[5])
+            natoms_A = int(comment_parts[6])
+            natoms_B = int(comment_parts[7])
+            ref_energy = float(comment_parts[8])  # CCSD(T)/CBS in kcal/mol
+
+            elements = []
+            positions = []
+            for _ in range(natoms):
+                parts = f.readline().split()
+                elements.append(parts[0].capitalize())
+                positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
+
+        if natoms_A + natoms_B != natoms:
+            logger.warning(
+                "Skipping %s: natoms_A (%d) + natoms_B (%d) != natoms (%d)",
+                fname, natoms_A, natoms_B, natoms,
+            )
+            continue
+
+        # Dimer
+        dimer_name = f"NENCI-{stem}"
+        species[dimer_name] = Species(
+            name=dimer_name,
+            charge=dimer_charge,
+            uhf=dimer_mult - 1,
+            elements=elements,
+            positions=positions,
+        )
+
+        # Monomer A (first natoms_A atoms)
+        monA_name = f"NENCI-{stem}_monA"
+        species[monA_name] = Species(
+            name=monA_name,
+            charge=monA_charge,
+            uhf=monA_mult - 1,
+            elements=elements[:natoms_A],
+            positions=positions[:natoms_A],
+        )
+
+        # Monomer B (remaining atoms)
+        monB_name = f"NENCI-{stem}_monB"
+        species[monB_name] = Species(
+            name=monB_name,
+            charge=monB_charge,
+            uhf=monB_mult - 1,
+            elements=elements[natoms_A:],
+            positions=positions[natoms_A:],
+        )
+
+        # Reaction: E_int = E_dimer - E_monA - E_monB
+        reactions.append(Reaction(
+            subset="NENCI",
+            index=len(reactions) + 1,
+            reference_energy=ref_energy,
+            weight=1.0,
+            stoichiometry={dimer_name: 1, monA_name: -1, monB_name: -1},
+        ))
+
+    if not reactions:
+        raise ValueError(f"No valid NENCI XYZ files found in {xyz_dir}")
+
+    logger.info(
+        "\n   Loaded %d reactions, %d unique species from NENCI-2021",
+        len(reactions), len(species),
+    )
+
+    return Dataset(name="NENCI-2021", reactions=reactions, species=species)
+
+
+def resolve_dataset(dataset_arg):
+    """Resolve a dataset argument to a Dataset object.
+
+    Supports:
+    - A path to a YAML file (existing behavior)
+    - "gmtkn55" to load all 55 GMTKN55 subsets
+    - "gmtkn55:S22,S66,BH76" to load specific subsets
+    - "nenci:/path/to/xyz/dir" to load NENCI-2021 dimer XYZ files
+
+    Parameters
+    ----------
+    dataset_arg : str
+
+    Returns
+    -------
+    Dataset
+    """
+    if dataset_arg.lower().startswith("gmtkn55"):
+        parts = dataset_arg.split(":", 1)
+        if len(parts) == 2 and parts[1].strip():
+            subsets = [s.strip() for s in parts[1].split(",")]
+        else:
+            subsets = None
+        return load_gmtkn55(subsets=subsets)
+    elif dataset_arg.lower().startswith("nenci:"):
+        path = dataset_arg.split(":", 1)[1]
+        return load_nenci(path)
+    else:
+        return load_dataset(dataset_arg)
 
 
 def generate_orca_inputs(dataset, output_dir, functional, basis="def2-TZVP",
