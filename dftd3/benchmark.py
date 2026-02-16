@@ -286,7 +286,7 @@ def load_gmtkn55(subsets=None):
     return Dataset(name=name, reactions=reactions, species=species)
 
 
-def load_nenci(xyz_dir):
+def load_nenci(xyz_dir, subsets=None):
     """Load NENCI-2021 dataset from a directory of dimer XYZ files.
 
     Each XYZ file contains one dimer configuration. The comment line (line 2)
@@ -298,10 +298,16 @@ def load_nenci(xyz_dir):
     Monomers appear in order: the first natoms_A atoms are monomer A, the
     remaining natoms_B atoms are monomer B.
 
+    Files can be organized flat or in subdirectories. When subdirectories
+    are present (e.g., S66/, S101/, IonPi/), each subdirectory name is
+    used as the subset label. Files in the root directory use "NENCI".
+
     Parameters
     ----------
     xyz_dir : str
-        Directory containing .xyz files.
+        Directory containing .xyz files, optionally in subdirectories.
+    subsets : list of str, optional
+        Only load files from these subdirectories.
 
     Returns
     -------
@@ -310,14 +316,24 @@ def load_nenci(xyz_dir):
     if not os.path.isdir(xyz_dir):
         raise FileNotFoundError(f"NENCI directory not found: {xyz_dir}")
 
+    # Collect (subset_label, filepath) pairs
+    file_list = []
+    for entry in sorted(os.listdir(xyz_dir)):
+        entry_path = os.path.join(xyz_dir, entry)
+        if os.path.isdir(entry_path):
+            if subsets is not None and entry not in subsets:
+                continue
+            for fname in sorted(os.listdir(entry_path)):
+                if fname.endswith(".xyz"):
+                    file_list.append((entry, os.path.join(entry_path, fname)))
+        elif entry.endswith(".xyz") and subsets is None:
+            file_list.append(("NENCI", entry_path))
+
     species = {}
     reactions = []
 
-    for fname in sorted(os.listdir(xyz_dir)):
-        if not fname.endswith(".xyz"):
-            continue
-
-        filepath = os.path.join(xyz_dir, fname)
+    for subset_label, filepath in file_list:
+        fname = os.path.basename(filepath)
         stem = os.path.splitext(fname)[0]
 
         with open(filepath) as f:
@@ -384,7 +400,7 @@ def load_nenci(xyz_dir):
 
         # Reaction: E_int = E_dimer - E_monA - E_monB
         reactions.append(Reaction(
-            subset="NENCI",
+            subset=subset_label,
             index=len(reactions) + 1,
             reference_energy=ref_energy,
             weight=1.0,
@@ -394,12 +410,143 @@ def load_nenci(xyz_dir):
     if not reactions:
         raise ValueError(f"No valid NENCI XYZ files found in {xyz_dir}")
 
+    # Dataset name reflects what was loaded
+    loaded_subsets = sorted({r.subset for r in reactions})
+    if loaded_subsets == ["NENCI"]:
+        name = "NENCI-2021"
+    elif len(loaded_subsets) == 1:
+        name = loaded_subsets[0]
+    else:
+        name = "NENCI_" + "+".join(loaded_subsets)
+
     logger.info(
         "\n   Loaded %d reactions, %d unique species from NENCI-2021",
         len(reactions), len(species),
     )
 
-    return Dataset(name="NENCI-2021", reactions=reactions, species=species)
+    return Dataset(name=name, reactions=reactions, species=species)
+
+
+def load_mpconf196(xyz_dir, molecules=None):
+    """Load MPCONF196 conformational energy benchmark from XYZ files.
+
+    MPCONF196 (Brauer et al., JCTC 2018) contains 196 conformers across
+    13 peptide and macrocycle molecules. Reference energies are CCSD(T)/CBS
+    or DLPNO-CCSD(T)/CBS relative conformational energies (kcal/mol),
+    expressed relative to the per-molecule mean.
+
+    Each XYZ file uses a non-standard format: line 1 is the filename (no
+    atom count), followed by element/coordinate lines. A ``reference_energies.csv``
+    file in the same directory provides benchmark energies with columns:
+    ``conformer,molecule,energy_kcal``.
+
+    Reactions measure each conformer's energy relative to the per-molecule
+    mean: E(conformer_i) - mean(E_all), giving 196 reactions (one per conformer).
+
+    Parameters
+    ----------
+    xyz_dir : str
+        Directory containing .xyz files and ``reference_energies.csv``.
+    molecules : list of str, optional
+        Only load conformers for these molecule groups (e.g. ["FGG", "GFA"]).
+
+    Returns
+    -------
+    Dataset
+    """
+    if not os.path.isdir(xyz_dir):
+        raise FileNotFoundError(f"MPCONF196 directory not found: {xyz_dir}")
+
+    # Read reference energies
+    csv_path = os.path.join(xyz_dir, "reference_energies.csv")
+    if not os.path.isfile(csv_path):
+        raise FileNotFoundError(
+            f"Reference energy file not found: {csv_path}\n"
+            "Expected a CSV with columns: conformer,molecule,energy_kcal"
+        )
+
+    ref_energies = {}  # conformer_name -> energy (kcal/mol)
+    mol_groups = {}    # conformer_name -> molecule group
+    with open(csv_path) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name = row["conformer"]
+            mol = row["molecule"]
+            if molecules is not None and mol not in molecules:
+                continue
+            ref_energies[name] = float(row["energy_kcal"])
+            mol_groups[name] = mol
+
+    # Read XYZ files (non-standard format: line 1 is title, no atom count)
+    species = {}
+    for fname in sorted(os.listdir(xyz_dir)):
+        if not fname.endswith(".xyz"):
+            continue
+        stem = os.path.splitext(fname)[0]
+        if stem not in ref_energies:
+            continue
+
+        filepath = os.path.join(xyz_dir, fname)
+        elements = []
+        positions = []
+        with open(filepath) as f:
+            f.readline()  # skip title line
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 4:
+                    elements.append(parts[0].capitalize())
+                    positions.append([float(parts[1]), float(parts[2]), float(parts[3])])
+
+        if not elements:
+            logger.warning("Skipping %s: no atoms found", fname)
+            continue
+
+        species[stem] = Species(
+            name=stem, charge=0, uhf=0,
+            elements=elements, positions=positions,
+        )
+
+    # Group conformers by molecule and create mean-relative reactions
+    by_molecule = {}
+    for name, mol in mol_groups.items():
+        if name in species:
+            by_molecule.setdefault(mol, []).append(name)
+
+    reactions = []
+    for mol in sorted(by_molecule):
+        conformers = sorted(by_molecule[mol])
+        n = len(conformers)
+        for conf in conformers:
+            # Reaction: E(conf) - mean(E_all) = conformer energy relative to group mean
+            # Stoichiometry: conf gets +1, each conformer (including conf) gets -1/N
+            stoich = {c: -1.0 / n for c in conformers}
+            stoich[conf] = stoich[conf] + 1.0  # net: (N-1)/N for target conformer
+            reactions.append(Reaction(
+                subset=mol,
+                index=len(reactions) + 1,
+                reference_energy=ref_energies[conf],
+                weight=1.0,
+                stoichiometry=stoich,
+            ))
+
+    if not reactions:
+        raise ValueError(f"No valid MPCONF196 conformers found in {xyz_dir}")
+
+    # Dataset name
+    loaded_molecules = sorted(by_molecule.keys())
+    if molecules is None or len(loaded_molecules) == 13:
+        name = "MPCONF196"
+    elif len(loaded_molecules) == 1:
+        name = loaded_molecules[0]
+    else:
+        name = "MPCONF_" + "+".join(loaded_molecules)
+
+    logger.info(
+        "\n   Loaded %d reactions, %d species from MPCONF196 (%d molecules)",
+        len(reactions), len(species), len(loaded_molecules),
+    )
+
+    return Dataset(name=name, reactions=reactions, species=species)
 
 
 def resolve_dataset(dataset_arg):
@@ -409,7 +556,10 @@ def resolve_dataset(dataset_arg):
     - A path to a YAML file (existing behavior)
     - "gmtkn55" to load all 55 GMTKN55 subsets
     - "gmtkn55:S22,S66,BH76" to load specific subsets
-    - "nenci:/path/to/xyz/dir" to load NENCI-2021 dimer XYZ files
+    - "nenci:/path/to/xyz/dir" to load all NENCI-2021 dimer XYZ files
+    - "nenci:/path:S66,IonPi" to load specific NENCI subdirectories
+    - "mpconf196:/path/to/xyz/dir" to load MPCONF196 conformer XYZ files
+    - "mpconf196:/path:FGG,GFA" to load specific molecule groups
 
     Parameters
     ----------
@@ -426,9 +576,28 @@ def resolve_dataset(dataset_arg):
         else:
             subsets = None
         return load_gmtkn55(subsets=subsets)
+    elif dataset_arg.lower().startswith("mpconf196:"):
+        rest = dataset_arg[10:]  # strip "mpconf196:"
+        # Check for molecule filter: mpconf196:/path:FGG,GFA
+        parts = rest.rsplit(":", 1)
+        if len(parts) == 2 and "/" not in parts[1] and "\\" not in parts[1]:
+            path, mol_str = parts
+            molecules = [s.strip() for s in mol_str.split(",")]
+        else:
+            path = rest
+            molecules = None
+        return load_mpconf196(path, molecules=molecules)
     elif dataset_arg.lower().startswith("nenci:"):
-        path = dataset_arg.split(":", 1)[1]
-        return load_nenci(path)
+        rest = dataset_arg[6:]  # strip "nenci:"
+        # Check for subset filter: nenci:/path:S66,IonPi
+        parts = rest.rsplit(":", 1)
+        if len(parts) == 2 and "/" not in parts[1] and "\\" not in parts[1]:
+            path, subset_str = parts
+            subsets = [s.strip() for s in subset_str.split(",")]
+        else:
+            path = rest
+            subsets = None
+        return load_nenci(path, subsets=subsets)
     else:
         return load_dataset(dataset_arg)
 

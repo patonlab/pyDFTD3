@@ -12,6 +12,7 @@ from dftd3.benchmark import (
     _ELEMENT_TO_Z,
     generate_orca_inputs,
     load_dataset,
+    load_mpconf196,
     load_nenci,
     read_energies_csv,
     resolve_dataset,
@@ -601,6 +602,252 @@ class TestLoadNENCI:
         ds = resolve_dataset(f"nenci:{nenci_dir}")
         assert ds.name == "NENCI-2021"
         assert len(ds.reactions) == 3
+
+
+# ---------------------------------------------------------------------------
+# NENCI subdirectory subsets
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def nenci_subdir(tmp_path):
+    """Create NENCI files organized into subdirectories (S66, IonPi)."""
+    root = tmp_path / "nenci_sub"
+    root.mkdir()
+
+    s66 = root / "S66"
+    s66.mkdir()
+    _write_nenci_xyz(
+        str(s66 / "water_water_01.xyz"),
+        elements_A=["O", "H", "H"],
+        positions_A=[[0.0, 0.0, 0.0], [0.0, 0.76, -0.47], [0.0, -0.76, -0.47]],
+        elements_B=["O", "H", "H"],
+        positions_B=[[3.0, 0.0, 0.0], [3.0, 0.76, -0.47], [3.0, -0.76, -0.47]],
+        ref_energy=-4.97,
+    )
+    _write_nenci_xyz(
+        str(s66 / "water_water_02.xyz"),
+        elements_A=["O", "H", "H"],
+        positions_A=[[0.0, 0.0, 0.0], [0.0, 0.76, -0.47], [0.0, -0.76, -0.47]],
+        elements_B=["O", "H", "H"],
+        positions_B=[[5.0, 0.0, 0.0], [5.0, 0.76, -0.47], [5.0, -0.76, -0.47]],
+        ref_energy=-1.23,
+    )
+
+    ionpi = root / "IonPi"
+    ionpi.mkdir()
+    _write_nenci_xyz(
+        str(ionpi / "methane_water_01.xyz"),
+        elements_A=["C", "H", "H", "H", "H"],
+        positions_A=[
+            [0.0, 0.0, 0.0], [0.63, 0.63, 0.63],
+            [-0.63, -0.63, 0.63], [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63],
+        ],
+        elements_B=["O", "H", "H"],
+        positions_B=[[4.0, 0.0, 0.0], [4.0, 0.76, -0.47], [4.0, -0.76, -0.47]],
+        ref_energy=-0.65,
+    )
+
+    return str(root)
+
+
+class TestLoadNENCISubdirs:
+    """Tests for NENCI loading with subdirectory-based subsets."""
+
+    def test_loads_all_subdirs(self, nenci_subdir):
+        ds = load_nenci(nenci_subdir)
+        assert len(ds.reactions) == 3
+        assert {r.subset for r in ds.reactions} == {"S66", "IonPi"}
+
+    def test_subset_labels(self, nenci_subdir):
+        ds = load_nenci(nenci_subdir)
+        s66_rxns = [r for r in ds.reactions if r.subset == "S66"]
+        ionpi_rxns = [r for r in ds.reactions if r.subset == "IonPi"]
+        assert len(s66_rxns) == 2
+        assert len(ionpi_rxns) == 1
+
+    def test_filter_single_subset(self, nenci_subdir):
+        ds = load_nenci(nenci_subdir, subsets=["S66"])
+        assert len(ds.reactions) == 2
+        assert all(r.subset == "S66" for r in ds.reactions)
+
+    def test_filter_excludes_other(self, nenci_subdir):
+        ds = load_nenci(nenci_subdir, subsets=["IonPi"])
+        assert len(ds.reactions) == 1
+        assert ds.reactions[0].subset == "IonPi"
+
+    def test_dataset_name_single_subset(self, nenci_subdir):
+        ds = load_nenci(nenci_subdir, subsets=["S66"])
+        assert ds.name == "S66"
+
+    def test_dataset_name_multiple_subsets(self, nenci_subdir):
+        ds = load_nenci(nenci_subdir)
+        assert ds.name == "NENCI_IonPi+S66"
+
+    def test_resolve_dataset_with_subset_filter(self, nenci_subdir):
+        ds = resolve_dataset(f"nenci:{nenci_subdir}:S66")
+        assert len(ds.reactions) == 2
+        assert all(r.subset == "S66" for r in ds.reactions)
+
+    def test_resolve_dataset_multiple_subsets(self, nenci_subdir):
+        ds = resolve_dataset(f"nenci:{nenci_subdir}:S66,IonPi")
+        assert len(ds.reactions) == 3
+
+    def test_empty_subset_raises(self, nenci_subdir):
+        with pytest.raises(ValueError, match="No valid NENCI"):
+            load_nenci(nenci_subdir, subsets=["Nonexistent"])
+
+
+# ---------------------------------------------------------------------------
+# MPCONF196 loading
+# ---------------------------------------------------------------------------
+
+def _write_mpconf_xyz(path, elements, positions):
+    """Write one MPCONF196-format XYZ file (title line, no atom count)."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    lines = [f"{stem}.xyz"]
+    for el, pos in zip(elements, positions):
+        lines.append(f"{el}  {pos[0]:.6f}  {pos[1]:.6f}  {pos[2]:.6f}")
+    lines.append("")
+    with open(path, "w") as f:
+        f.write("\n".join(lines))
+
+
+@pytest.fixture
+def mpconf_dir(tmp_path):
+    """Create a temp MPCONF196-style directory with 2 molecule groups."""
+    d = tmp_path / "mpconf"
+    d.mkdir()
+
+    # Molecule A: 3 conformers (water at different orientations)
+    for name, positions in [
+        ("MolA_I", [[0.0, 0.0, 0.12], [0.0, 0.76, -0.47], [0.0, -0.76, -0.47]]),
+        ("MolA_a", [[0.0, 0.0, 0.12], [0.0, 0.80, -0.47], [0.0, -0.80, -0.47]]),
+        ("MolA_b", [[0.0, 0.0, 0.12], [0.0, 0.70, -0.47], [0.0, -0.70, -0.47]]),
+    ]:
+        _write_mpconf_xyz(str(d / f"{name}.xyz"), ["O", "H", "H"], positions)
+
+    # Molecule B: 2 conformers (methane-like)
+    for name, positions in [
+        ("MolB01", [
+            [0.0, 0.0, 0.0], [0.63, 0.63, 0.63],
+            [-0.63, -0.63, 0.63], [-0.63, 0.63, -0.63], [0.63, -0.63, -0.63],
+        ]),
+        ("MolB02", [
+            [0.0, 0.0, 0.0], [0.65, 0.65, 0.65],
+            [-0.65, -0.65, 0.65], [-0.65, 0.65, -0.65], [0.65, -0.65, -0.65],
+        ]),
+    ]:
+        _write_mpconf_xyz(str(d / f"{name}.xyz"), ["C", "H", "H", "H", "H"], positions)
+
+    # Reference energies CSV
+    import csv
+    csv_path = str(d / "reference_energies.csv")
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["conformer", "molecule", "energy_kcal"])
+        writer.writerow(["MolA_I", "MolA", "0.000"])
+        writer.writerow(["MolA_a", "MolA", "1.500"])
+        writer.writerow(["MolA_b", "MolA", "-0.800"])
+        writer.writerow(["MolB01", "MolB", "0.300"])
+        writer.writerow(["MolB02", "MolB", "-0.300"])
+
+    return str(d)
+
+
+class TestLoadMPCONF196:
+    """Tests for loading MPCONF196 conformational energy benchmark."""
+
+    def test_reaction_count(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        # MolA: 3 conformers -> 3 reactions; MolB: 2 conformers -> 2 reactions
+        assert len(ds.reactions) == 5
+
+    def test_species_count(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        assert len(ds.species) == 5
+
+    def test_subset_labels(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        subsets = {r.subset for r in ds.reactions}
+        assert subsets == {"MolA", "MolB"}
+
+    def test_mean_relative_stoichiometry(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        # Each reaction: target conf gets (N-1)/N, others get -1/N
+        # Coefficients should sum to 0.0
+        for rxn in ds.reactions:
+            assert sum(rxn.stoichiometry.values()) == pytest.approx(0.0)
+
+    def test_reference_energies(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        # Reference energies come directly from the CSV (mean-relative)
+        mola_rxns = sorted(
+            [r for r in ds.reactions if r.subset == "MolA"],
+            key=lambda r: r.reference_energy,
+        )
+        # MolA_I=0.0, MolA_a=1.5, MolA_b=-0.8
+        assert mola_rxns[0].reference_energy == pytest.approx(-0.800)
+        assert mola_rxns[1].reference_energy == pytest.approx(0.000)
+        assert mola_rxns[2].reference_energy == pytest.approx(1.500)
+
+    def test_molecule_filter(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir, molecules=["MolA"])
+        assert len(ds.reactions) == 3
+        assert all(r.subset == "MolA" for r in ds.reactions)
+        assert len(ds.species) == 3
+
+    def test_dataset_name_full(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        # molecules=None loads all -> name is "MPCONF196"
+        assert ds.name == "MPCONF196"
+
+    def test_dataset_name_single_molecule(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir, molecules=["MolB"])
+        assert ds.name == "MolB"
+
+    def test_d3_computable(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        for sp in ds.species.values():
+            im = precompute_d3(sp)
+            energy = d3_energy_bj(im, 1.0, 1.9889, 0.3981, 4.4211)
+            assert np.isfinite(energy)
+
+    def test_missing_dir_raises(self):
+        with pytest.raises(FileNotFoundError):
+            load_mpconf196("/nonexistent/path")
+
+    def test_missing_csv_raises(self, tmp_path):
+        d = tmp_path / "no_csv"
+        d.mkdir()
+        _write_mpconf_xyz(str(d / "conf01.xyz"), ["H", "H"], [[0, 0, 0], [0, 0, 1]])
+        with pytest.raises(FileNotFoundError, match="reference_energies.csv"):
+            load_mpconf196(str(d))
+
+    def test_empty_dir_raises(self, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        # Write CSV but no matching XYZ files
+        import csv
+        with open(str(d / "reference_energies.csv"), "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["conformer", "molecule", "energy_kcal"])
+        with pytest.raises(ValueError, match="No valid MPCONF196"):
+            load_mpconf196(str(d))
+
+    def test_resolve_dataset_mpconf196(self, mpconf_dir):
+        ds = resolve_dataset(f"mpconf196:{mpconf_dir}")
+        assert len(ds.reactions) == 5
+
+    def test_resolve_dataset_with_molecule_filter(self, mpconf_dir):
+        ds = resolve_dataset(f"mpconf196:{mpconf_dir}:MolA")
+        assert len(ds.reactions) == 3
+        assert all(r.subset == "MolA" for r in ds.reactions)
+
+    def test_element_symbols_valid(self, mpconf_dir):
+        ds = load_mpconf196(mpconf_dir)
+        for sp in ds.species.values():
+            for el in sp.elements:
+                assert el in _ELEMENT_TO_Z
 
 
 # ---------------------------------------------------------------------------

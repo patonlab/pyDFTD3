@@ -172,6 +172,21 @@ class FitResult:
 # Objective functions
 # ---------------------------------------------------------------------------
 
+class _ObjectiveWMAD:
+    """Picklable objective for differential_evolution with workers > 1."""
+
+    def __init__(self, reactions, intermediates_dict, dft_energies, damp):
+        self.reactions = reactions
+        self.intermediates_dict = intermediates_dict
+        self.dft_energies = dft_energies
+        self.damp = damp
+
+    def __call__(self, params):
+        return _weighted_mad(
+            self.reactions, self.intermediates_dict,
+            self.dft_energies, self.damp, params)
+
+
 def _reaction_errors(reactions, intermediates_dict, dft_energies, damp, params):
     """Compute per-reaction errors for given parameters.
 
@@ -223,6 +238,29 @@ def _compute_statistics(reactions, intermediates_dict, dft_energies, damp, param
     rmsd = np.sqrt(np.mean([e ** 2 for _, e, _ in errors]))
     max_err = max(abs_errors)
 
+    return wmad, mad, rmsd, max_err
+
+
+def _compute_no_d3_statistics(reactions, dft_energies):
+    """Compute statistics with no D3 correction (DFT only vs reference)."""
+    if not reactions:
+        return 0.0, 0.0, 0.0, 0.0
+
+    errors = []
+    weights = []
+    for rxn in reactions:
+        dft_rxn = sum(coeff * dft_energies[sp] * AUTOKCAL
+                      for sp, coeff in rxn.stoichiometry.items())
+        error = dft_rxn - rxn.reference_energy
+        errors.append(error)
+        weights.append(rxn.weight)
+
+    abs_errors = [abs(e) for e in errors]
+    weight_sum = sum(weights)
+    wmad = sum(w * ae for w, ae in zip(weights, abs_errors)) / weight_sum if weight_sum > 0 else 0.0
+    mad = np.mean(abs_errors)
+    rmsd = np.sqrt(np.mean([e ** 2 for e in errors]))
+    max_err = max(abs_errors)
     return wmad, mad, rmsd, max_err
 
 
@@ -346,16 +384,15 @@ def fit_d3_params(dataset, dft_energies, config=None):
     else:
         bounds = [config.rs6_bounds, config.s8_bounds]
 
-    # Objective: weighted MAD on training set
-    def objective(params):
-        return _weighted_mad(train_rxns, intermediates, dft_energies, config.damp, params)
+    # Objective: picklable callable so workers > 1 works with multiprocessing
+    objective = _ObjectiveWMAD(train_rxns, intermediates, dft_energies, config.damp)
 
-    # Progress callback
+    # Progress callback (runs in main process, no pickle needed)
     gen_count = [0]
 
     def _progress(xk, convergence=0):
         gen_count[0] += 1
-        wmad = _weighted_mad(train_rxns, intermediates, dft_energies, config.damp, xk)
+        wmad = objective(xk)
         sys.stdout.write(
             f"\r   Generation {gen_count[0]:4d}  WMAD: {wmad:.4f}  "
             f"convergence: {convergence:.2e}   "
@@ -363,6 +400,7 @@ def fit_d3_params(dataset, dft_energies, config=None):
         sys.stdout.flush()
 
     # Run optimizer
+    updating = "deferred" if config.workers != 1 else "immediate"
     result = differential_evolution(
         objective,
         bounds=bounds,
@@ -370,6 +408,7 @@ def fit_d3_params(dataset, dft_energies, config=None):
         tol=config.tol,
         popsize=config.popsize,
         workers=config.workers,
+        updating=updating,
         seed=config.random_seed,
         callback=_progress,
     )
@@ -443,11 +482,11 @@ def _published_params_array(functional, damp):
 
 
 def compute_published_stats(dataset, dft_energies, functional, damp,
-                            test_reactions=None):
+                            train_reactions=None, test_reactions=None,
+                            val_datasets=None):
     """Compute statistics for published parameters, if they exist.
 
-    Returns a dict {"train": (wmad, mad, rmsd, max_err, n), ...} or None.
-    If test_reactions is provided, also includes a "test" key.
+    Returns list of (label, n, wmad, mad, rmsd, max_err) tuples, or None.
     """
     pub_params = _published_params_array(functional, damp)
     if pub_params is None:
@@ -455,19 +494,82 @@ def compute_published_stats(dataset, dft_energies, functional, damp,
     intermediates = {}
     for sp_name, sp in dataset.species.items():
         intermediates[sp_name] = precompute_d3(sp)
+
+    rows = []
+    rxns = train_reactions if train_reactions is not None else dataset.reactions
     tw, tm, tr, tx = _compute_statistics(
-        dataset.reactions, intermediates, dft_energies, damp, pub_params)
-    stats = {"train": (tw, tm, tr, tx, len(dataset.reactions))}
+        rxns, intermediates, dft_energies, damp, pub_params)
+    rows.append(("Train", len(rxns), tw, tm, tr, tx))
+
     if test_reactions:
         vw, vm, vr, vx = _compute_statistics(
             test_reactions, intermediates, dft_energies, damp, pub_params)
-        stats["test"] = (vw, vm, vr, vx, len(test_reactions))
-    return stats
+        rows.append(("Test", len(test_reactions), vw, vm, vr, vx))
+
+    if val_datasets:
+        for name, val_ds, val_energies in val_datasets:
+            val_ims = {}
+            for sp_name, sp in val_ds.species.items():
+                val_ims[sp_name] = precompute_d3(sp)
+            vw, vm, vr, vx = _compute_statistics(
+                val_ds.reactions, val_ims, val_energies, damp, pub_params)
+            rows.append((name, len(val_ds.reactions), vw, vm, vr, vx))
+
+    return rows
 
 
-def print_results(result, verbose=False, functional=None, basis=None,
-                  published_stats=None, val_stats=None):
-    """Print formatted optimization results."""
+def compute_no_d3_stats(dft_energies, train_reactions=None, test_reactions=None,
+                        val_datasets=None):
+    """Compute statistics with no D3 correction.
+
+    Returns list of (label, n, wmad, mad, rmsd, max_err) tuples.
+    """
+    rows = []
+    if train_reactions:
+        w, m, r, x = _compute_no_d3_statistics(train_reactions, dft_energies)
+        rows.append(("Train", len(train_reactions), w, m, r, x))
+    if test_reactions:
+        w, m, r, x = _compute_no_d3_statistics(test_reactions, dft_energies)
+        rows.append(("Test", len(test_reactions), w, m, r, x))
+    if val_datasets:
+        for name, val_ds, val_energies in val_datasets:
+            w, m, r, x = _compute_no_d3_statistics(val_ds.reactions, val_energies)
+            rows.append((name, len(val_ds.reactions), w, m, r, x))
+    return rows
+
+
+def _print_stats_table(title, rows):
+    """Print a statistics table.
+
+    Parameters
+    ----------
+    title : str
+        Table title (e.g. "Optimized (kcal/mol)").
+    rows : list of (label, n, wmad, mad, rmsd, max_err) tuples
+    """
+    print()
+    print("   " + "-" * 72)
+    print(f"   {title:<24s} {'N':>5s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s} {'Max Err':>8s}")
+    print("   " + "-" * 72)
+    for label, n, wmad, mad, rmsd, max_err in rows:
+        print(f"   {label + ':':<24s} {n:5d} {wmad:8.3f} {mad:8.3f} {rmsd:8.3f} {max_err:8.3f}")
+
+
+def print_results(result, verbose=0, functional=None, basis=None,
+                  published_stats=None, no_d3_stats=None, val_stats=None):
+    """Print formatted optimization results.
+
+    Parameters
+    ----------
+    result : FitResult
+    verbose : int
+        0 = summary only, 1 = per-subset breakdown, 2 = per-reaction errors
+    functional, basis : str or None
+    published_stats : list of (label, n, wmad, mad, rmsd, max_err) or None
+    no_d3_stats : list of (label, n, wmad, mad, rmsd, max_err) or None
+    val_stats : list of (label, n, wmad, mad, rmsd, max_err) for optimized
+        params on external validation datasets
+    """
     print()
     print("   "+"=" * 72)
     print("   D3 Parameter Optimization Results")
@@ -517,32 +619,26 @@ def print_results(result, verbose=False, functional=None, basis=None,
     cli_parts = " ".join(f"--{k} {v}" for k, v in result.params.items())
     print(f"\n   pydftd3 CLI:  {cli_parts}")
 
-    print()
-    stat_label = "Statistics (kcal/mol)"
-    stat_header = f"   {stat_label:<24s} {'N':>5s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s} {'Max Err':>8s}"
-    print("   " + "-" * 72)
-    print(stat_header)
-    print("   " + "-" * 72)
-    print(f"   {'Train:':<24s} {result.n_train:5d} {result.weighted_mad:8.3f} {result.mad:8.3f} "
-          f"{result.rmsd:8.3f} {result.max_error:8.3f}")
+    # --- Table 1: Optimized parameters ---
+    opt_rows = [("Train", result.n_train, result.weighted_mad, result.mad,
+                 result.rmsd, result.max_error)]
     if result.test_weighted_mad is not None:
-        print(f"   {'Test:':<24s} {result.n_test:5d} {result.test_weighted_mad:8.3f} {result.test_mad:8.3f} "
-              f"{result.test_rmsd:8.3f} {result.test_max_error:8.3f}")
-    if published_stats is not None:
-        if "test" in published_stats:
-            pw, pm, pr, px, pn = published_stats["train"]
-            print(f"   {'Published (train):':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
-            pw, pm, pr, px, pn = published_stats["test"]
-            print(f"   {'Published (test):':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
-        else:
-            pw, pm, pr, px, pn = published_stats["train"]
-            print(f"   {'Published:':<24s} {pn:5d} {pw:8.3f} {pm:8.3f} {pr:8.3f} {px:8.3f}")
+        opt_rows.append(("Test", result.n_test, result.test_weighted_mad,
+                         result.test_mad, result.test_rmsd, result.test_max_error))
     if val_stats:
-        for label, vw, vm, vr, vx, vn in val_stats:
-            print(f"   {label + ':':<24s} {vn:5d} {vw:8.3f} {vm:8.3f} {vr:8.3f} {vx:8.3f}")
+        opt_rows.extend(val_stats)
+    _print_stats_table("Optimized (kcal/mol)", opt_rows)
+
+    # --- Table 2: Published parameters ---
+    if published_stats is not None:
+        _print_stats_table("Published (kcal/mol)", published_stats)
+
+    # --- Table 3: No D3 correction ---
+    if no_d3_stats:
+        _print_stats_table("No D3 (kcal/mol)", no_d3_stats)
 
     # Per-subset breakdown
-    if verbose:
+    if verbose >= 1:
         print()
         print("   " + "-" * 72)
         print(f"   {'Per-Subset Breakdown':<24s} {'N':>5s} {'WMAD':>8s} {'MAD':>8s} {'RMSD':>8s} {'Max Err':>8s}")
@@ -563,6 +659,11 @@ def print_results(result, verbose=False, functional=None, basis=None,
             rmsd = np.sqrt(np.mean([e["error"] ** 2 for e in entries]))
             max_err = max(abs_errors)
             print(f"   {subset_name:<24s} {n:5d} {wmad:8.3f} {mad:8.3f} {rmsd:8.3f} {max_err:8.3f}")
+
+            if verbose >= 2:
+                sorted_entries = sorted(entries, key=lambda e: e["index"])
+                for e in sorted_entries:
+                    print(f"      {e['index']:>4d}  {e['error']:+8.3f}  (w={e['weight']:.2f})")
 
     print("   "+"=" * 72)
 
@@ -613,8 +714,8 @@ def optimize_main(argv):
     fit.add_argument("--skip-missing", action="store_true",
                      help="Skip reactions with missing DFT energies instead of aborting")
     fit.add_argument("--save-csv", default=None, help="Save per-reaction errors to CSV")
-    fit.add_argument("-v", dest="verbose", action="store_true", default=False,
-                     help="Print per-subset breakdown")
+    fit.add_argument("-v", dest="verbose", action="count", default=0,
+                     help="Verbose output (-v per-subset, -vv per-reaction)")
 
     args = parser.parse_args(argv)
 
@@ -674,7 +775,11 @@ def _load_validation_datasets(args):
         if en_arg.endswith(".csv"):
             val_energies, _, _ = read_energies_csv(en_arg)
         else:
-            val_energies, _, _ = parse_orca_outputs(en_arg)
+            val_energies, val_func, val_basis = parse_orca_outputs(en_arg)
+            csv_path = os.path.join(en_arg, "dft_energies.csv")
+            write_energies_csv(val_energies, csv_path,
+                               functional=val_func, basis=val_basis)
+            print(f"   Saved validation energies to {csv_path}")
 
         # Check for missing energies
         missing = set(val_ds.species.keys()) - set(val_energies.keys())
@@ -697,7 +802,7 @@ def _load_validation_datasets(args):
 def _compute_val_stats(val_datasets, params_dict, damp):
     """Compute statistics on external validation datasets.
 
-    Returns list of (label, wmad, mad, rmsd, max_err, n) tuples.
+    Returns list of (label, n, wmad, mad, rmsd, max_err) tuples.
     """
     if not val_datasets:
         return []
@@ -711,7 +816,7 @@ def _compute_val_stats(val_datasets, params_dict, damp):
             intermediates[sp_name] = precompute_d3(sp)
         vw, vm, vr, vx = _compute_statistics(
             val_ds.reactions, intermediates, val_energies, damp, params_array)
-        stats.append((name, vw, vm, vr, vx, len(val_ds.reactions)))
+        stats.append((name, len(val_ds.reactions), vw, vm, vr, vx))
 
     return stats
 
@@ -785,10 +890,6 @@ def _cmd_fit(args):
         workers=args.workers,
     )
 
-    pub_stats = compute_published_stats(
-        dataset, dft_energies, detected_functional, args.damp,
-        test_reactions=test_subset_rxns)
-
     # Load external validation datasets
     val_datasets = _load_validation_datasets(args)
     if val_datasets is None:
@@ -797,7 +898,7 @@ def _cmd_fit(args):
     if args.folds > 0:
         _cmd_fit_cv(dataset, dft_energies, config, args,
                     functional=detected_functional, basis=detected_basis,
-                    published_stats=pub_stats, val_datasets=val_datasets)
+                    test_subset_rxns=test_subset_rxns, val_datasets=val_datasets)
     else:
         result = fit_d3_params(dataset, dft_energies, config)
 
@@ -815,12 +916,29 @@ def _cmd_fit(args):
             result.test_max_error = tx
             result.n_test = len(test_subset_rxns)
 
-        # Compute external validation stats
+        # Determine train/test split for comparison stats
+        if test_subset_rxns:
+            comp_train = dataset.reactions
+            comp_test = test_subset_rxns
+        else:
+            comp_train, comp_test = train_test_split(
+                dataset.reactions, config.test_fraction, config.random_seed)
+
+        # Compute all stats blocks
         val_stats = _compute_val_stats(val_datasets, result.params, args.damp)
+        pub_stats = compute_published_stats(
+            dataset, dft_energies, detected_functional, args.damp,
+            train_reactions=comp_train, test_reactions=comp_test or None,
+            val_datasets=val_datasets or None)
+        no_d3 = compute_no_d3_stats(
+            dft_energies, train_reactions=comp_train,
+            test_reactions=comp_test or None,
+            val_datasets=val_datasets or None)
 
         print_results(result, verbose=args.verbose,
                       functional=detected_functional, basis=detected_basis,
-                      published_stats=pub_stats, val_stats=val_stats)
+                      published_stats=pub_stats, no_d3_stats=no_d3,
+                      val_stats=val_stats)
 
         if args.save_csv:
             _save_errors_csv(result, args.save_csv)
@@ -852,7 +970,7 @@ def _fit_one_fold(fold_idx, train_rxns, test_rxns, intermediates, dft_energies, 
 
 
 def _cmd_fit_cv(dataset, dft_energies, config, args, functional=None, basis=None,
-                published_stats=None, val_datasets=None):
+                test_subset_rxns=None, val_datasets=None):
     """Run k-fold cross-validation."""
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -916,12 +1034,34 @@ def _cmd_fit_cv(dataset, dft_energies, config, args, functional=None, basis=None
     )
     final_result = fit_d3_params(dataset, dft_energies, config_all)
 
-    # Compute external validation stats
+    # Update with subset test stats if applicable
+    if test_subset_rxns:
+        params_array = _params_to_array(final_result.params, config.damp)
+        tw, tm, tr, tx = _compute_statistics(
+            test_subset_rxns, intermediates, dft_energies, config.damp, params_array)
+        final_result.test_weighted_mad = tw
+        final_result.test_mad = tm
+        final_result.test_rmsd = tr
+        final_result.test_max_error = tx
+        final_result.n_test = len(test_subset_rxns)
+
+    # Compute all stats blocks
+    comp_train = dataset.reactions
+    comp_test = test_subset_rxns
     val_stats = _compute_val_stats(val_datasets or [], final_result.params, config.damp)
+    pub_stats = compute_published_stats(
+        dataset, dft_energies, functional, config.damp,
+        train_reactions=comp_train, test_reactions=comp_test or None,
+        val_datasets=val_datasets or None)
+    no_d3 = compute_no_d3_stats(
+        dft_energies, train_reactions=comp_train,
+        test_reactions=comp_test or None,
+        val_datasets=val_datasets or None)
 
     print_results(final_result, verbose=args.verbose,
                   functional=functional, basis=basis,
-                  published_stats=published_stats, val_stats=val_stats)
+                  published_stats=pub_stats, no_d3_stats=no_d3,
+                  val_stats=val_stats)
 
 
 def _save_errors_csv(result, csv_path):

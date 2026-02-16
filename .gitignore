@@ -5,4 +5,8 @@ CLAUDE.md
 timer.dat
 TODO*
 nenci2021/
-dft_data/
+dft_data/*/*inp
+dft_data/*/*out
+
+ct7b01074_si_001.xlsx
+opt_protocol
