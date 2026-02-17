@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 
 from dftd3.benchmark import (
+    _ELEMENT_TO_Z,
     Dataset,
     Reaction,
     Species,
-    _ELEMENT_TO_Z,
     generate_orca_inputs,
     load_dataset,
     load_mpconf196,
@@ -23,6 +23,8 @@ from dftd3.optimize import (
     OptimizeConfig,
     d3_energy_bj,
     d3_energy_zero,
+    evaluate_no_d3,
+    evaluate_params,
     fit_d3_params,
     precompute_d3,
     train_test_split,
@@ -820,7 +822,7 @@ class TestLoadMPCONF196:
         d = tmp_path / "no_csv"
         d.mkdir()
         _write_mpconf_xyz(str(d / "conf01.xyz"), ["H", "H"], [[0, 0, 0], [0, 0, 1]])
-        with pytest.raises(FileNotFoundError, match="reference_energies.csv"):
+        with pytest.raises(FileNotFoundError, match="Reference energy file not found"):
             load_mpconf196(str(d))
 
     def test_empty_dir_raises(self, tmp_path):
@@ -943,3 +945,75 @@ class TestResolveDataset:
             im = precompute_d3(sp)
             energy = d3_energy_bj(im, 1.0, 1.9889, 0.3981, 4.4211)
             assert np.isfinite(energy)
+
+
+# ---------------------------------------------------------------------------
+# evaluate_params / evaluate_no_d3
+# ---------------------------------------------------------------------------
+
+class TestEvaluateParams:
+    def test_returns_expected_keys(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_params(ds, dft_energies, "bj", [1.9889, 0.3981, 4.4211])
+        assert set(stats.keys()) == {"wmad", "mad", "rmsd", "max_err", "n_reactions"}
+
+    def test_n_reactions(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_params(ds, dft_energies, "bj", [1.9889, 0.3981, 4.4211])
+        assert stats["n_reactions"] == 3
+
+    def test_finite_values(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_params(ds, dft_energies, "bj", [1.9889, 0.3981, 4.4211])
+        for key in ("wmad", "mad", "rmsd", "max_err"):
+            assert np.isfinite(stats[key])
+
+    def test_intermediates_reuse(self, mini_yaml):
+        """Pre-computed intermediates give identical results."""
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        params = [1.9889, 0.3981, 4.4211]
+
+        stats_fresh = evaluate_params(ds, dft_energies, "bj", params)
+        ims = {name: precompute_d3(sp) for name, sp in ds.species.items()}
+        stats_cached = evaluate_params(ds, dft_energies, "bj", params,
+                                       intermediates=ims)
+        assert stats_fresh["wmad"] == pytest.approx(stats_cached["wmad"])
+        assert stats_fresh["mad"] == pytest.approx(stats_cached["mad"])
+
+    def test_zero_damping(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_params(ds, dft_energies, "zero", [1.261, 0.7220])
+        assert np.isfinite(stats["wmad"])
+
+    def test_different_params_different_results(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats1 = evaluate_params(ds, dft_energies, "bj", [1.0, 0.4, 4.5])
+        stats2 = evaluate_params(ds, dft_energies, "bj", [2.0, 0.5, 5.0])
+        assert stats1["wmad"] != pytest.approx(stats2["wmad"], abs=1e-6)
+
+
+class TestEvaluateNoD3:
+    def test_returns_expected_keys(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_no_d3(ds, dft_energies)
+        assert set(stats.keys()) == {"wmad", "mad", "rmsd", "max_err", "n_reactions"}
+
+    def test_n_reactions(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_no_d3(ds, dft_energies)
+        assert stats["n_reactions"] == 3
+
+    def test_finite_values(self, mini_yaml):
+        ds = load_dataset(mini_yaml)
+        dft_energies = {sp: -76.0 for sp in ds.species}
+        stats = evaluate_no_d3(ds, dft_energies)
+        for key in ("wmad", "mad", "rmsd", "max_err"):
+            assert np.isfinite(stats[key])

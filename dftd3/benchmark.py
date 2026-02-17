@@ -1,8 +1,9 @@
 """
 benchmark.py - Load benchmark datasets and generate ORCA inputs.
 
-Provides tools for loading benchmark reaction datasets from DietGMTKN55 YAML
-files, GMTKN55 (via the gmtkn package), or NENCI-2021 XYZ files. Also
+Provides tools for loading benchmark reaction datasets from GMTKN55 YAML
+files, GMTKN55 (via the gmtkn package), NENCI-2021 XYZ files, or
+MPCONF196 conformational energy data. Also
 generates ORCA input files for dispersion-free DFT calculations and parses
 ORCA outputs to extract single-point energies.
 """
@@ -87,12 +88,12 @@ class Dataset:
 
 
 def load_dataset(yaml_path):
-    """Load a DietGMTKN55 YAML file into a Dataset object.
+    """Load a GMTKN55 YAML file into a Dataset object.
 
     Parameters
     ----------
     yaml_path : str
-        Path to a DietGMTKN55 AllElements YAML file
+        Path to a GMTKN55 AllElements YAML file
         (e.g. AllElements_100.yaml).
 
     Returns
@@ -457,11 +458,13 @@ def load_mpconf196(xyz_dir, molecules=None):
     if not os.path.isdir(xyz_dir):
         raise FileNotFoundError(f"MPCONF196 directory not found: {xyz_dir}")
 
-    # Read reference energies
+    # Read reference energies — check xyz_dir first, then parent directory
     csv_path = os.path.join(xyz_dir, "reference_energies.csv")
     if not os.path.isfile(csv_path):
+        csv_path = os.path.join(os.path.dirname(os.path.normpath(xyz_dir)), "reference_energies.csv")
+    if not os.path.isfile(csv_path):
         raise FileNotFoundError(
-            f"Reference energy file not found: {csv_path}\n"
+            f"Reference energy file not found in {xyz_dir} or parent directory\n"
             "Expected a CSV with columns: conformer,molecule,energy_kcal"
         )
 
@@ -576,8 +579,8 @@ def resolve_dataset(dataset_arg):
         else:
             subsets = None
         return load_gmtkn55(subsets=subsets)
-    elif dataset_arg.lower().startswith("mpconf196:"):
-        rest = dataset_arg[10:]  # strip "mpconf196:"
+    elif dataset_arg.lower().startswith("mpconf196:") or dataset_arg.lower().startswith("mpconf:"):
+        rest = dataset_arg.split(":", 1)[1]
         # Check for molecule filter: mpconf196:/path:FGG,GFA
         parts = rest.rsplit(":", 1)
         if len(parts) == 2 and "/" not in parts[1] and "\\" not in parts[1]:
@@ -750,7 +753,7 @@ def parse_orca_outputs(output_dir):
 
     # Fallback: extract functional from input echo keywords
     if detected_functional is None and input_echo_keywords:
-        from .pars import bj_parms, zero_parms, resolve_functional
+        from .pars import bj_parms, resolve_functional, zero_parms
         known = set(bj_parms) | set(zero_parms)
         for kw in input_echo_keywords:
             # Strip trailing /G (Gaussian compatibility notation)

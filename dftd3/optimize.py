@@ -461,6 +461,57 @@ def fit_d3_params(dataset, dft_energies, config=None):
 
 
 # ---------------------------------------------------------------------------
+# Public evaluation API
+# ---------------------------------------------------------------------------
+
+def evaluate_params(dataset, dft_energies, damp, params_array, intermediates=None):
+    """Evaluate D3 parameters on a dataset without optimization.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        Benchmark dataset with reactions and species.
+    dft_energies : dict
+        Species name -> DFT energy in Hartree.
+    damp : str
+        Damping scheme ("bj" or "zero").
+    params_array : list
+        [s8, a1, a2] for BJ or [rs6, s8] for zero.
+    intermediates : dict, optional
+        Pre-computed {species_name: D3Intermediates}. If None, computed fresh.
+
+    Returns
+    -------
+    dict with keys: wmad, mad, rmsd, max_err, n_reactions
+    """
+    if intermediates is None:
+        intermediates = {name: precompute_d3(sp) for name, sp in dataset.species.items()}
+    wmad, mad, rmsd, max_err = _compute_statistics(
+        dataset.reactions, intermediates, dft_energies, damp, params_array)
+    return {"wmad": wmad, "mad": mad, "rmsd": rmsd, "max_err": max_err,
+            "n_reactions": len(dataset.reactions)}
+
+
+def evaluate_no_d3(dataset, dft_energies):
+    """Evaluate no-D3 baseline on a dataset.
+
+    Parameters
+    ----------
+    dataset : Dataset
+        Benchmark dataset with reactions and species.
+    dft_energies : dict
+        Species name -> DFT energy in Hartree.
+
+    Returns
+    -------
+    dict with keys: wmad, mad, rmsd, max_err, n_reactions
+    """
+    wmad, mad, rmsd, max_err = _compute_no_d3_statistics(dataset.reactions, dft_energies)
+    return {"wmad": wmad, "mad": mad, "rmsd": rmsd, "max_err": max_err,
+            "n_reactions": len(dataset.reactions)}
+
+
+# ---------------------------------------------------------------------------
 # Output formatting
 # ---------------------------------------------------------------------------
 
@@ -468,7 +519,7 @@ def _published_params_array(functional, damp):
     """Return published parameter array for the functional, or None."""
     if not functional:
         return None
-    from .pars import bj_parms, zero_parms, resolve_functional
+    from .pars import bj_parms, resolve_functional, zero_parms
     canonical = resolve_functional(functional)
     if canonical is None:
         return None
@@ -593,7 +644,7 @@ def print_results(result, verbose=0, functional=None, basis=None,
     # Look up published parameters for comparison
     published = None
     if functional:
-        from .pars import bj_parms, zero_parms, resolve_functional
+        from .pars import bj_parms, resolve_functional, zero_parms
         canonical = resolve_functional(functional)
         if canonical is not None and result.damp == "bj" and canonical in bj_parms:
             p = bj_parms[canonical]
@@ -717,6 +768,21 @@ def optimize_main(argv):
     fit.add_argument("-v", dest="verbose", action="count", default=0,
                      help="Verbose output (-v per-subset, -vv per-reaction)")
 
+    # --- eval subcommand ---
+    evl = subparsers.add_parser("eval", help="Evaluate D3 parameters on a dataset (no optimization).")
+    evl.add_argument("dataset", help="Dataset specifier (YAML, gmtkn55:S22, nenci:/path, mpconf:/path)")
+    evl.add_argument("--energies", required=True,
+                     help="CSV file with DFT energies, or directory of ORCA .out files")
+    evl.add_argument("--damp", default="bj", choices=("zero", "bj"),
+                     help="Damping scheme (default: bj)")
+    evl.add_argument("--func", default=None,
+                     help="Functional for published parameter lookup")
+    evl.add_argument("--params", default=None,
+                     help="Custom parameters as comma-separated values "
+                          "(BJ: s8,a1,a2; zero: rs6,s8)")
+    evl.add_argument("--skip-missing", action="store_true",
+                     help="Skip reactions with missing DFT energies instead of aborting")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -727,6 +793,8 @@ def optimize_main(argv):
         return _cmd_prep(args)
     elif args.command == "fit":
         return _cmd_fit(args)
+    elif args.command == "eval":
+        return _cmd_eval(args)
     return 1
 
 
@@ -741,6 +809,102 @@ def _cmd_prep(args):
         maxcore=args.maxcore, extra_keywords=args.extra,
     )
     print(f"Generated {len(paths)} ORCA input files in {args.output_dir}/")
+    return 0
+
+
+def _cmd_eval(args):
+    """Handle 'pydftd3 optimize eval' command."""
+    dataset = resolve_dataset(args.dataset)
+    print(f"\n   Loaded {len(dataset.reactions)} reactions, {len(dataset.species)} unique species")
+
+    # Load DFT energies
+    detected_functional = None
+    detected_basis = None
+    if args.energies.endswith(".csv"):
+        dft_energies, detected_functional, detected_basis = read_energies_csv(args.energies)
+    else:
+        dft_energies, detected_functional, detected_basis = parse_orca_outputs(args.energies)
+        csv_path = os.path.join(args.energies, "dft_energies.csv")
+        write_energies_csv(dft_energies, csv_path,
+                           functional=detected_functional, basis=detected_basis)
+        print(f"\n   Saved DFT energies to {csv_path}")
+
+    # Validate completeness
+    missing = set(dataset.species.keys()) - set(dft_energies.keys())
+    if missing:
+        if not args.skip_missing:
+            print(f"\n   Error: Missing DFT energies for {len(missing)} species:")
+            for name in sorted(missing)[:10]:
+                print(f"  - {name}")
+            if len(missing) > 10:
+                print(f"  ... and {len(missing) - 10} more")
+            print("\n   Use --skip-missing to drop reactions that reference these species.")
+            return 1
+        n_before = len(dataset.reactions)
+        dataset.reactions = [
+            rxn for rxn in dataset.reactions
+            if not (set(rxn.stoichiometry.keys()) & missing)
+        ]
+        n_dropped = n_before - len(dataset.reactions)
+        print(f"   Skipping {len(missing)} missing species, dropped {n_dropped}/{n_before} reactions")
+
+    print(f"   Loaded DFT energies for {len(dft_energies)} species, {len(dataset.reactions)} reactions")
+
+    functional = args.func or detected_functional
+    damp_label = "Becke-Johnson (BJ)" if args.damp == "bj" else "Zero"
+
+    print()
+    print("   " + "=" * 72)
+    print("   D3 Parameter Evaluation")
+    print("   " + "=" * 72)
+    if functional:
+        print(f"   Functional:        {functional}")
+    if detected_basis:
+        print(f"   Basis set:         {detected_basis}")
+    print(f"   Damping scheme:    {damp_label}")
+    print(f"   Reactions:         {len(dataset.reactions)}")
+
+    # Precompute intermediates once
+    intermediates = {name: precompute_d3(sp) for name, sp in dataset.species.items()}
+
+    # Custom parameters
+    if args.params:
+        vals = [float(x.strip()) for x in args.params.split(",")]
+        custom_stats = evaluate_params(dataset, dft_energies, args.damp, vals,
+                                       intermediates=intermediates)
+        if args.damp == "bj":
+            label = f"Custom (s8={vals[0]:.4f}, a1={vals[1]:.4f}, a2={vals[2]:.4f})"
+        else:
+            label = f"Custom (rs6={vals[0]:.4f}, s8={vals[1]:.4f})"
+        _print_stats_table("Custom Parameters (kcal/mol)", [
+            (label, custom_stats["n_reactions"], custom_stats["wmad"],
+             custom_stats["mad"], custom_stats["rmsd"], custom_stats["max_err"]),
+        ])
+
+    # Published parameters
+    pub_params = _published_params_array(functional, args.damp)
+    if pub_params is not None:
+        pub_stats = evaluate_params(dataset, dft_energies, args.damp, pub_params,
+                                    intermediates=intermediates)
+        if args.damp == "bj":
+            label = f"Published (s8={pub_params[0]:.4f}, a1={pub_params[1]:.4f}, a2={pub_params[2]:.4f})"
+        else:
+            label = f"Published (rs6={pub_params[0]:.4f}, s8={pub_params[1]:.4f})"
+        _print_stats_table("Published (kcal/mol)", [
+            (label, pub_stats["n_reactions"], pub_stats["wmad"],
+             pub_stats["mad"], pub_stats["rmsd"], pub_stats["max_err"]),
+        ])
+    elif functional:
+        print(f"\n   No published {damp_label} parameters found for {functional}")
+
+    # No D3 baseline
+    no_d3 = evaluate_no_d3(dataset, dft_energies)
+    _print_stats_table("No D3 (kcal/mol)", [
+        ("No correction", no_d3["n_reactions"], no_d3["wmad"],
+         no_d3["mad"], no_d3["rmsd"], no_d3["max_err"]),
+    ])
+
+    print("   " + "=" * 72)
     return 0
 
 

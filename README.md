@@ -206,7 +206,7 @@ pydftd3 optimize fit <dataset> --energies <dir_or_csv> --damp bj
 
 | Format | Example | Description |
 |--------|---------|-------------|
-| YAML path | `AllElements_100.yaml` | DietGMTKN55 YAML file |
+| YAML path | `AllElements_100.yaml` | GMTKN55 YAML file |
 | `gmtkn55` | `gmtkn55` | All 55 GMTKN55 subsets (requires [gmtkn](https://github.com/obackhouse/gmtkn)) |
 | `gmtkn55:subsets` | `gmtkn55:S22,S66,BH76` | Specific GMTKN55 subsets |
 | `nenci:path` | `nenci:nenci2021/` | NENCI-2021 dimer XYZ files |
